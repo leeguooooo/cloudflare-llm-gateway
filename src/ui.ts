@@ -224,6 +224,7 @@ const PAGE = String.raw`<!doctype html>
     <div class="brand"><span class="logo-dot"></span><h1>__BRAND__</h1></div>
     <div class="subt">// AI key 池</div>
     <nav class="nav" id="nav"></nav>
+    <a class="navitem" id="preview-toggle" style="display:none; color:var(--blue); margin-top:6px; font-size:15px"></a>
     <div class="spacer"></div>
     <div class="me-box">
       <span class="em" id="me-email"></span>
@@ -670,6 +671,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'docs',        label:'文档', color:'amber'}
     ]
   };
+  var previewUser=false;
   function buildNav(role){
     var items = NAV[role] || NAV.user;
     $('nav').innerHTML = items.map(function(it){
@@ -732,7 +734,14 @@ const PAGE = String.raw`<!doctype html>
   var chatMsgs=[];
   function initChat(){
     loadModels().then(function(){
-      var sel=$('chat-model'); if(sel && !sel.options.length) sel.innerHTML=(modelsCache||[]).map(function(m){return '<option>'+esc(m.id)+'</option>';}).join('');
+      var sel=$('chat-model');
+      if(sel && !sel.options.length){
+        var groups={};
+        (modelsCache||[]).forEach(function(m){ (groups[m.owned_by]=groups[m.owned_by]||[]).push(m.id); });
+        sel.innerHTML = Object.keys(groups).map(function(p){
+          return '<optgroup label="'+esc(p)+'">'+groups[p].map(function(id){return '<option>'+esc(id)+'</option>';}).join('')+'</optgroup>';
+        }).join('');
+      }
     });
     var b=$('chat-send'); if(b) b.onclick=sendChat;
     var cl=$('chat-clear'); if(cl) cl.onclick=function(){ chatMsgs=[]; renderChat('chat-log',chatMsgs); };
@@ -1239,7 +1248,20 @@ const PAGE = String.raw`<!doctype html>
     $('me-email').textContent = me.email || '';
     $('me-role').textContent = me.role;
     $('me-rolepill').className = 'pill ' + (me.role==='admin'?'ok':'');
+    previewUser=false;
     buildNav(me.role);
+    var pt=$('preview-toggle');
+    if(pt){
+      if(me.role==='admin'){
+        pt.style.display='flex';
+        pt.textContent='👤 预览用户视角';
+        pt.onclick=function(){
+          previewUser=!previewUser;
+          pt.textContent = previewUser ? '↩ 回管理台' : '👤 预览用户视角';
+          buildNav(previewUser ? 'user' : 'admin');
+        };
+      } else { pt.style.display='none'; }
+    }
   }
   function boot(){
     return api('/auth/me').then(function(r){
