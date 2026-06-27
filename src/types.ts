@@ -22,6 +22,10 @@ export interface Env {
   ADMIN_EMAIL?: string;
   /** HMAC secret for signing session + PKCE cookies (Worker secret). */
   SESSION_SECRET?: string;
+  /** Console branding (optional). */
+  BRAND_NAME?: string;
+  SSO_LABEL?: string;
+  SSO_NOTE?: string;
 }
 
 export interface ApiKeyRow {

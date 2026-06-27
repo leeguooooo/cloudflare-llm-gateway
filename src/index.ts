@@ -22,7 +22,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Role-routed admin/consumer console (self-contained HTML). Auth is enforced
 // by the API routes it calls (SSO session or bearer token).
-app.get("/", (c) => c.html(adminPage()));
+app.get("/", (c) => c.html(adminPage(c.env)));
 
 app.get("/healthz", async (c) => {
   const stats = await statsSummary(c.env);

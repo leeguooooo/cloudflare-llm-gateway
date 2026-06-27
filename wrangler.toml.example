@@ -38,3 +38,8 @@ PROBE_INTERVAL_MINUTES = "60"
 # --- Secrets (set with `wrangler secret put`, never commit) ---
 #   wrangler secret put ADMIN_TOKEN      # bearer token for admin/API access
 #   wrangler secret put SESSION_SECRET   # random 32+ bytes, signs session cookies
+
+# --- Optional: console branding ---
+# BRAND_NAME = "keypool"             # product name shown in the UI
+# SSO_LABEL  = "Sign in"             # login button text
+# SSO_NOTE   = "Single sign-on."     # hint under the login button

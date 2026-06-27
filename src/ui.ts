@@ -17,8 +17,28 @@
  * browser NEVER sends an Authorization header.
  */
 
-export function adminPage(): string {
-  return PAGE;
+/** Operator-configurable branding (set via wrangler [vars]; all optional). */
+interface Brand {
+  BRAND_NAME?: string;
+  SSO_LABEL?: string;
+  SSO_NOTE?: string;
+}
+
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function adminPage(env?: Brand): string {
+  const brand = env?.BRAND_NAME || "keypool";
+  const ssoLabel = env?.SSO_LABEL || "使用 SSO 登录";
+  const ssoNote = env?.SSO_NOTE || "单点登录(OIDC)。登录后由管理员开通即可使用。";
+  return PAGE.replaceAll("__BRAND__", escHtml(brand))
+    .replaceAll("__SSO_LABEL__", escHtml(ssoLabel))
+    .replaceAll("__SSO_NOTE__", escHtml(ssoNote));
 }
 
 const PAGE = String.raw`<!doctype html>
@@ -26,7 +46,7 @@ const PAGE = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>keypool · AI key 池</title>
+<title>__BRAND__ · AI key 池</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -162,14 +182,14 @@ const PAGE = String.raw`<!doctype html>
 <div id="view-landing" class="center" style="display:none">
   <header class="top">
     <span class="logo-dot"></span>
-    <h1>keypool</h1>
+    <h1>__BRAND__</h1>
   </header>
   <div class="tagline">// 把一堆 AI key 攒成一个稳定的接口 · 坏了自动下架</div>
   <div class="card r1">
     <h2 class="h-red"><span class="hd"></span>登录</h2>
     <p style="margin:0 0 16px; color:var(--muted)">一个 OpenAI 兼容的 AI 网关。登录后即可申请 API 令牌。</p>
-    <button class="btn primary" onclick="location.href='/auth/login'">使用 SSO 登录</button>
-    <div class="hint">单点登录(OIDC)。登录后由管理员开通即可使用。</div>
+    <button class="btn primary" onclick="location.href='/auth/login'">__SSO_LABEL__</button>
+    <div class="hint">__SSO_NOTE__</div>
   </div>
   <div class="card r2" id="landing-models" style="display:none">
     <h2 class="h-green"><span class="hd"></span>可用模型</h2>
@@ -184,7 +204,7 @@ const PAGE = String.raw`<!doctype html>
 <div id="view-pending" class="center" style="display:none">
   <header class="top">
     <span class="logo-dot"></span>
-    <h1>keypool</h1>
+    <h1>__BRAND__</h1>
   </header>
   <div class="tagline">// 账号开通制 · 管理员审核后开通</div>
   <div class="card r1">
@@ -201,7 +221,7 @@ const PAGE = String.raw`<!doctype html>
 <!-- ============ 3 & 4. console (sidebar + content) ============ -->
 <div id="view-console" class="layout" style="display:none">
   <aside class="side">
-    <div class="brand"><span class="logo-dot"></span><h1>keypool</h1></div>
+    <div class="brand"><span class="logo-dot"></span><h1>__BRAND__</h1></div>
     <div class="subt">// AI key 池</div>
     <nav class="nav" id="nav"></nav>
     <div class="spacer"></div>
