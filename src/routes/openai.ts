@@ -8,16 +8,19 @@ import { routeModelToProvider } from "../providers/types";
 import { getAdapter } from "../providers";
 import { callWithPool } from "../keypool";
 import { requireUser, resolveCaller } from "../auth";
-import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro } from "../db";
+import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro, providersWithActiveKeys } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.use("*", requireUser);
 
-/** GET /models — union of every adapter's models() in OpenAI list shape. */
-app.get("/models", (c) => {
+/** GET /models — only models whose provider currently has ≥1 active key, so
+ *  consumers never see (and pick) a model that can't be served right now. */
+app.get("/models", async (c) => {
+  const avail = await providersWithActiveKeys(c.env);
   const data: Array<{ id: string; object: "model"; owned_by: string }> = [];
   for (const provider of PROVIDERS) {
+    if (!avail.has(provider)) continue;
     for (const id of getAdapter(provider).models()) {
       data.push({ id, object: "model", owned_by: provider });
     }
