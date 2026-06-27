@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+*.log
+.DS_Store
+.admin-token.txt
+
+# local real config (use wrangler.toml.example as the template)
+wrangler.toml
+# internal build-time design docs
+CONTRACTS.md
+CONTRACTS-v2.md
