@@ -49,6 +49,8 @@ export interface Env {
   BILLING_ENABLED?: string;
   /** Fallback price (micro-USD per 1M tokens) when a model isn't in the prices table. */
   DEFAULT_PRICE_MICRO?: string;
+  /** Global sell discount on market prices (e.g. "0.1" = 1折). Default 1. */
+  DISCOUNT?: string;
   /** Stripe (Worker secrets) — online top-up; unset = payment disabled. */
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;

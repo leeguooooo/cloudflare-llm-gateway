@@ -22,6 +22,8 @@ import {
   listBalances,
   topUpMicro,
   listTransactions,
+  billingEnabled,
+  billingDiscount,
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
@@ -113,6 +115,14 @@ app.post("/keys/import", async (c) => {
 app.get("/keys", async (c) => {
   const summary = await statsSummary(c.env);
   return c.json(summary);
+});
+
+// GET /config — billing flags for the console.
+app.get("/config", (c) => {
+  return c.json({
+    billing_enabled: billingEnabled(c.env),
+    discount: billingDiscount(c.env),
+  });
 });
 
 // GET /usage — global usage aggregates (last 30 days).
@@ -269,11 +279,42 @@ app.get("/keys/list", async (c) => {
       total_requests: k.total_requests,
       total_fails: k.total_fails,
       last_error: k.last_error,
+      disabled_reason: k.disabled_reason,
       last_used_at: k.last_used_at,
       cooldown_until: k.cooldown_until,
       created_at: k.created_at,
     })),
   });
+});
+
+// POST /check-all-keys — probe every key in one go (capped for the subrequest
+// limit); revive the ones that pass, disable dead ones. (Outside /keys/ to avoid
+// colliding with the /keys/:id param routes.)
+app.post("/check-all-keys", async (c) => {
+  const all = await listAllKeys(c.env);
+  const subset = all.slice(0, 48); // stay under the Worker subrequest cap
+  const results = await Promise.all(
+    subset.map(async (k) => {
+      try {
+        const r = await probeKey(k.provider, k.api_key);
+        if (r.alive && !r.rateLimited && k.status !== "active") {
+          await reactivateKey(c.env, k.id);
+        } else if (!r.alive && !r.rateLimited && k.status === "active") {
+          await applyOutcome(
+            c.env,
+            k.id,
+            { kind: "disable", reason: r.error || `http ${r.status}` },
+            { cooldownMinutes: cooldownMinutes(c.env), maxConsecutive: MAX_CONSECUTIVE_FAILS }
+          );
+        }
+        return r.alive;
+      } catch {
+        return false;
+      }
+    })
+  );
+  const alive = results.filter(Boolean).length;
+  return c.json({ checked: results.length, alive, dead: results.length - alive, capped: all.length > subset.length });
 });
 
 // DELETE /keys/:id — permanently remove a key.
@@ -337,8 +378,20 @@ async function probeKey(
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
     if (provider === "qwen") {
-      const r = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+      // /models returns 200 even when the account is in arrears; only inference
+      // is blocked. Probe with a 1-token chat so 欠费 is actually caught.
+      const r = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "qwen-turbo", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        const arrears = /arrearage|overdue|欠费|insufficient/i.test(t);
+        return { alive: false, status: r.status, rateLimited: r.status === 429, balance: null, error: arrears ? "欠费/余额不足" : `http ${r.status}` };
+      }
+      return { alive: true, status: r.status, rateLimited: false, balance: null };
     }
     if (provider === "glm") {
       // GLM has no reliable models endpoint; probe with a 1-token chat.

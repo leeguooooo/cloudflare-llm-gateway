@@ -370,6 +370,8 @@ const PAGE = String.raw`<!doctype html>
         <div class="card r1">
           <h2 class="h-red"><span class="hd"></span>所有 key
             <span style="flex:1"></span>
+            <span id="keylist-checkall-out" class="hint" style="margin:0 10px 0 0"></span>
+            <button class="btn primary small" id="keylist-checkall">检测全部</button>
             <button class="btn ghost small" id="keylist-refresh">刷新</button>
           </h2>
           <table>
@@ -471,7 +473,7 @@ const PAGE = String.raw`<!doctype html>
       <!-- ----- admin: 计费 ----- -->
       <section class="section" id="sec-billing">
         <h2 class="sec-h">计费</h2>
-        <p class="sec-sub">// 余额(micro-USD)· 充值 · 流水</p>
+        <p class="sec-sub">// 余额 · 充值 · 流水 · 定价 <span id="bill-config" style="color:var(--ink)"></span></p>
         <div class="card r2">
           <h2 class="h-red"><span class="hd"></span>充值</h2>
           <div class="row">
@@ -656,7 +658,7 @@ const PAGE = String.raw`<!doctype html>
     if(id==='tokens') loadMyTokens();
     if(id==='overview') loadStats('ov');
     if(id==='keys') loadStats('keys');
-    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; loadKeyList(); }
+    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
     if(id==='usage') loadUserUsage();
@@ -716,7 +718,13 @@ const PAGE = String.raw`<!doctype html>
   }
 
   // ---------------- admin: billing ----------------
-  function loadBilling(){ loadBalances(); loadBillingTxns(); loadPrices(); }
+  function loadBilling(){
+    loadBalances(); loadBillingTxns(); loadPrices();
+    api('/admin/config').then(function(r){ if(!r.ok) return; var b=r.body||{};
+      var zhe = b.discount!=null ? (b.discount*10) : 10;
+      $('bill-config').innerHTML = '· 计费'+(b.billing_enabled?'<b style="color:var(--green)">开</b>':'<b style="color:var(--red)">关</b>')+' · 折扣 <b>'+zhe+'折</b>(市场价×'+(b.discount!=null?b.discount:1)+')';
+    });
+  }
   function loadBalances(){
     var tb=$('bill-balances-body');
     return api('/admin/balances').then(function(r){
@@ -831,6 +839,15 @@ const PAGE = String.raw`<!doctype html>
   }
 
   // ---------------- admin: per-key list ----------------
+  function checkAllKeys(){
+    var btn=$('keylist-checkall'), out=$('keylist-checkall-out');
+    if(btn) btn.disabled=true; if(out) out.textContent='检测中…(几十个 key 需要十几秒)';
+    api('/admin/check-all-keys',{method:'POST'}).then(function(r){
+      if(btn) btn.disabled=false; var b=r.body||{};
+      if(out) out.innerHTML='<span style="color:var(--green)">可用 '+(b.alive||0)+'</span> / 不可用 '+(b.dead||0)+(b.capped?' · 已截断(过多)':'');
+      loadKeyList();
+    }).catch(function(){ if(btn) btn.disabled=false; if(out) out.textContent='出错'; });
+  }
   function loadKeyList(){
     var tb=$('keylist-body');
     tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr>';
@@ -839,7 +856,8 @@ const PAGE = String.raw`<!doctype html>
       if(!keys.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有 key</td></tr>'; return; }
       tb.innerHTML = keys.map(function(k){
         var sd = k.status==='active'?'d-active':k.status==='cooldown'?'d-cooldown':'d-disabled';
-        var err = k.last_error ? esc(String(k.last_error).slice(0,48)) : '';
+        var reason = (k.status==='disabled' && k.disabled_reason) ? k.disabled_reason : k.last_error;
+        var err = reason ? esc(String(reason).slice(0,60)) : '';
         var toggle = (k.status==='active')
           ? '<button class="btn ghost small kl-disable">禁用</button>'
           : '<button class="btn ghost small kl-enable">启用</button>';

@@ -47,6 +47,7 @@ PROBE_INTERVAL_MINUTES = "60"
 # --- Optional: billing (credits) ---
 # BILLING_ENABLED = "1"             # enforce balances + charge per token
 # DEFAULT_PRICE_MICRO = "500000"    # micro-USD per 1M tokens when model not priced
+# DISCOUNT = "0.1"                  # global sell discount on the prices table (0.1 = 1折)
 
 # --- Optional: Stripe online top-up ---
 # PUBLIC_BASE_URL = "https://llm.example.com"   # Stripe success/cancel redirects
