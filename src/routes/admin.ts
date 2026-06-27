@@ -170,15 +170,32 @@ app.post("/keys/:id/disable", async (c) => {
 
 // POST /tokens — mint an access token.
 app.post("/tokens", async (c) => {
-  let opts: { name?: string; role?: "admin" | "user" } = {};
+  let opts: {
+    name?: string;
+    role?: "admin" | "user";
+    quotaRequests?: number | null;
+    rpmLimit?: number | null;
+    expiresAt?: number | null;
+  } = {};
   const contentType = c.req.header("content-type") ?? "";
   if (contentType.includes("application/json")) {
     try {
       const body: unknown = await c.req.json();
       if (body !== null && typeof body === "object") {
-        const b = body as { name?: unknown; role?: unknown };
+        const b = body as {
+          name?: unknown;
+          role?: unknown;
+          quota_requests?: unknown;
+          rpm_limit?: unknown;
+          expires_in_days?: unknown;
+        };
         if (typeof b.name === "string") opts.name = b.name;
         if (b.role === "admin" || b.role === "user") opts.role = b.role;
+        if (typeof b.quota_requests === "number" && b.quota_requests > 0) opts.quotaRequests = b.quota_requests;
+        if (typeof b.rpm_limit === "number" && b.rpm_limit > 0) opts.rpmLimit = b.rpm_limit;
+        if (typeof b.expires_in_days === "number" && b.expires_in_days > 0) {
+          opts.expiresAt = Date.now() + b.expires_in_days * 86400000;
+        }
       }
     } catch {
       return c.json(

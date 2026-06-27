@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_access_tokens (
   name       TEXT,
   role       TEXT    NOT NULL DEFAULT 'user',          -- user | admin
   enabled    INTEGER NOT NULL DEFAULT 1,
+  expires_at     INTEGER,
+  rpm_limit      INTEGER,
+  quota_requests INTEGER,
+  used_requests  INTEGER NOT NULL DEFAULT 0,
   owner_sub  TEXT,                                      -- OIDC subject of owner (NULL = admin-minted)
   created_at INTEGER NOT NULL
 );
@@ -59,3 +63,4 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_request_logs (
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_created ON keypool_gateway_request_logs(created_at);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_owner ON keypool_gateway_request_logs(owner_sub, created_at);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_final ON keypool_gateway_request_logs(final, created_at);
+CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_token ON keypool_gateway_request_logs(token_id, created_at);

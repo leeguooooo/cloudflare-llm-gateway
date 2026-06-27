@@ -8,6 +8,7 @@ import { routeModelToProvider } from "../providers/types";
 import { getAdapter } from "../providers";
 import { callWithPool } from "../keypool";
 import { requireUser, resolveCaller } from "../auth";
+import { checkTokenLimits, incrementTokenUse } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -45,12 +46,22 @@ app.post("/chat/completions", async (c) => {
 
   const provider = routeModelToProvider(body.model);
   const caller = await resolveCaller(c.env, c.req.raw);
-  return callWithPool(
+  if (caller.tokenId !== null) {
+    const chk = await checkTokenLimits(c.env, caller.tokenId);
+    if (!chk.ok) {
+      return c.json({ error: { message: chk.message, type: "limit_exceeded" } }, chk.status as 429);
+    }
+  }
+  const res = await callWithPool(
     c.env,
     provider,
     (key) => getAdapter(provider).chatCompletions(body, key),
     { model: body.model, tokenId: caller.tokenId, ownerSub: caller.ownerSub },
   );
+  if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
+    await incrementTokenUse(c.env, caller.tokenId);
+  }
+  return res;
 });
 
 export default app;

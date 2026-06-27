@@ -270,8 +270,8 @@ const PAGE = String.raw`<!doctype html>
             <button class="btn ghost small" id="my-tokens-refresh">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>id</th><th>名字</th><th>令牌</th><th>启用</th><th>创建</th><th></th></tr></thead>
-            <tbody id="my-token-list"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <thead><tr><th>id</th><th>名字</th><th>令牌</th><th>启用</th><th>用量</th><th>创建</th><th></th></tr></thead>
+            <tbody id="my-token-list"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -404,6 +404,9 @@ const PAGE = String.raw`<!doctype html>
           <h2 class="h-blue"><span class="hd"></span>发令牌</h2>
           <div class="row">
             <div><label>令牌名(可选)</label><input id="adm-tname" placeholder="例如 service-x" autocomplete="off" /></div>
+            <div><label>配额(请求数)</label><input id="adm-quota" type="number" min="1" placeholder="无限" /></div>
+            <div><label>限速(RPM)</label><input id="adm-rpm" type="number" min="1" placeholder="无限" /></div>
+            <div><label>有效期(天)</label><input id="adm-exp" type="number" min="1" placeholder="永久" /></div>
             <button class="btn primary" id="adm-mint">发一个令牌</button>
           </div>
           <div class="out" id="adm-mint-out" style="display:none"></div>
@@ -414,8 +417,8 @@ const PAGE = String.raw`<!doctype html>
             <button class="btn ghost small" id="adm-tokens-refresh">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>id</th><th>名字</th><th>角色</th><th>启用</th><th>创建</th></tr></thead>
-            <tbody id="adm-token-list"><tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <thead><tr><th>id</th><th>名字</th><th>角色</th><th>用量</th><th>RPM</th><th>过期</th><th>启用</th><th>创建</th></tr></thead>
+            <tbody id="adm-token-list"><tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -693,12 +696,13 @@ const PAGE = String.raw`<!doctype html>
     return api('/me/tokens').then(function(r){
       var list = Array.isArray(r.body)? r.body : [];
       var tb=$('my-token-list');
-      if(!list.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有令牌</td></tr>'; return; }
+      if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">还没有令牌</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         return '<tr><td>'+t.id+'</td>'
           + '<td style="font-weight:700">'+esc(t.name||'–')+'</td>'
           + '<td><span class="mono-token copyable" data-copy="'+esc(t.token)+'">'+esc(t.token)+'</span></td>'
           + '<td>'+(t.enabled?'是':'否')+'</td>'
+          + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
           + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td>'
           + '<td><button class="btn ghost small" data-del="'+t.id+'">删除</button></td></tr>';
       }).join('');
@@ -821,22 +825,31 @@ const PAGE = String.raw`<!doctype html>
     return api('/admin/tokens').then(function(r){
       var list = Array.isArray(r.body)? r.body : [];
       var tb=$('adm-token-list');
-      if(!list.length){ tb.innerHTML='<tr><td colspan="5" style="color:var(--faint)">还没有</td></tr>'; return; }
+      if(!list.length){ tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">还没有</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         return '<tr><td>'+t.id+'</td><td style="font-weight:700">'+esc(t.name||'–')+'</td>'
-          + '<td>'+esc(t.role)+'</td><td>'+(t.enabled?'是':'否')+'</td>'
+          + '<td>'+esc(t.role)+'</td>'
+          + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
+          + '<td class="n">'+(t.rpm_limit==null?'∞':t.rpm_limit)+'</td>'
+          + '<td style="color:var(--faint)">'+(t.expires_at==null?'永久':fmtDate(t.expires_at))+'</td>'
+          + '<td>'+(t.enabled?'是':'否')+'</td>'
           + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td></tr>';
       }).join('');
     });
   }
   function mintAdmin(){
     var name=$('adm-tname').value.trim();
+    var q=parseInt($('adm-quota').value,10), rpm=parseInt($('adm-rpm').value,10), exp=parseInt($('adm-exp').value,10);
+    var payload={name:name};
+    if(q>0) payload.quota_requests=q;
+    if(rpm>0) payload.rpm_limit=rpm;
+    if(exp>0) payload.expires_in_days=exp;
     var btn=$('adm-mint'); btn.disabled=true;
-    api('/admin/tokens',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:name})})
+    api('/admin/tokens',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){ btn.disabled=false; var o=$('adm-mint-out'); o.style.display='block';
       if(!r.ok){ o.innerHTML='<span class="e">错误 '+r.status+'</span>'; return; }
       o.innerHTML='新令牌(立即复制): <span class="k mono-token copyable" data-copy="'+esc(r.body.token)+'">'+esc(r.body.token)+'</span>';
-      bindCopy(o); $('adm-tname').value=''; loadAdminTokens();
+      bindCopy(o); $('adm-tname').value=''; $('adm-quota').value=''; $('adm-rpm').value=''; $('adm-exp').value=''; loadAdminTokens();
     }).catch(function(){ btn.disabled=false; });
   }
 

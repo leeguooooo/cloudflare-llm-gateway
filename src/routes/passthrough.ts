@@ -17,6 +17,7 @@ import type { Env, Provider } from "../types";
 import { requireUser, resolveCaller } from "../auth";
 import { callWithPool } from "../keypool";
 import { getAdapter } from "../providers";
+import { checkTokenLimits, incrementTokenUse } from "../db";
 
 type AppEnv = { Bindings: Env };
 
@@ -42,12 +43,22 @@ function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
     const subPath = computeSubPath(c, provider);
     const req = c.req.raw;
     const caller = await resolveCaller(c.env, req);
-    return callWithPool(
+    if (caller.tokenId !== null) {
+      const chk = await checkTokenLimits(c.env, caller.tokenId);
+      if (!chk.ok) {
+        return c.json({ error: { message: chk.message, type: "limit_exceeded" } }, chk.status as 429);
+      }
+    }
+    const res = await callWithPool(
       c.env,
       provider,
       (key: string) => getAdapter(provider).passthrough(subPath, req, key),
       { tokenId: caller.tokenId, ownerSub: caller.ownerSub }
     );
+    if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
+      await incrementTokenUse(c.env, caller.tokenId);
+    }
+    return res;
   };
 }
 
