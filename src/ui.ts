@@ -371,6 +371,7 @@ const PAGE = String.raw`<!doctype html>
           <h2 class="h-red"><span class="hd"></span>所有 key
             <span style="flex:1"></span>
             <span id="keylist-checkall-out" class="hint" style="margin:0 10px 0 0"></span>
+            <button class="btn ghost small" id="keylist-toggle">显示禁用</button>
             <button class="btn primary small" id="keylist-checkall">检测全部</button>
             <button class="btn ghost small" id="keylist-refresh">刷新</button>
           </h2>
@@ -658,7 +659,7 @@ const PAGE = String.raw`<!doctype html>
     if(id==='tokens') loadMyTokens();
     if(id==='overview') loadStats('ov');
     if(id==='keys') loadStats('keys');
-    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; loadKeyList(); }
+    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
     if(id==='usage') loadUserUsage();
@@ -848,12 +849,17 @@ const PAGE = String.raw`<!doctype html>
       loadKeyList();
     }).catch(function(){ if(btn) btn.disabled=false; if(out) out.textContent='出错'; });
   }
+  var keylistShowDisabled = false;
   function loadKeyList(){
     var tb=$('keylist-body');
     tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/keys/list').then(function(r){
-      var keys=(r.body && r.body.keys) || [];
-      if(!keys.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有 key</td></tr>'; return; }
+      var all=(r.body && r.body.keys) || [];
+      var disN = all.filter(function(k){return k.status==='disabled';}).length;
+      var tg=$('keylist-toggle'); if(tg) tg.textContent = keylistShowDisabled ? '只看启用' : ('显示禁用('+disN+')');
+      var keys = keylistShowDisabled ? all : all.filter(function(k){return k.status!=='disabled';});
+      if(!all.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有 key</td></tr>'; return; }
+      if(!keys.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">全部已禁用 · 点「显示禁用」查看</td></tr>'; return; }
       tb.innerHTML = keys.map(function(k){
         var sd = k.status==='active'?'d-active':k.status==='cooldown'?'d-cooldown':'d-disabled';
         var reason = (k.status==='disabled' && k.disabled_reason) ? k.disabled_reason : k.last_error;
