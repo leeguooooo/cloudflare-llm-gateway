@@ -25,5 +25,6 @@ jobs:
             echo "Set KEYPOOL_URL and KEYPOOL_ADMIN_TOKEN repo secrets."; exit 1
           fi
           curl -sS -X POST "$KEYPOOL_URL/admin/check-all-keys" \
-            -H "Authorization: Bearer $KEYPOOL_ADMIN_TOKEN" \
-            --max-time 110
+            -H "Authorization: Bearer $KEYPOOL_ADMIN_TOKEN" --max-time 110
+          curl -sS -X POST "$KEYPOOL_URL/admin/probe-models" \
+            -H "Authorization: Bearer $KEYPOOL_ADMIN_TOKEN" --max-time 110

@@ -924,7 +924,9 @@ const PAGE = String.raw`<!doctype html>
       g+='<text x="'+(x+bw/2)+'" y="'+(H-7)+'" text-anchor="middle" font-size="8.5" fill="var(--faint)" font-family="ui-monospace,monospace">'+esc(label)+'</text>';
       return g;
     }).join('');
-    el.innerHTML='<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMinYMid meet" style="max-width:100%;height:auto;display:block">'
+    // Fixed display height; width derives from the viewBox so a 2-day chart
+    // stays small instead of being scaled up to fill the whole card.
+    el.innerHTML='<svg height="150" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMinYMid meet" style="max-width:100%;display:block">'
       +'<line x1="5" y1="'+base+'" x2="'+(W-5)+'" y2="'+base+'" stroke="var(--ink)" stroke-width="1.5"/>'
       +bars+'</svg>';
   }
