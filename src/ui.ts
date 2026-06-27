@@ -715,7 +715,8 @@ const PAGE = String.raw`<!doctype html>
     el.innerHTML = msgs.map(function(m){
       var who = m.role==='user'?'你':(m.role==='assistant'?'AI':m.role);
       var col = m.role==='user'?'var(--blue)':'var(--green)';
-      return '<div style="margin-bottom:11px"><b style="font-family:var(--marker);color:'+col+'">'+who+'</b>'
+      var note = m.note ? '<div style="font-size:12px;color:var(--amber);margin-top:2px">⤷ '+esc(m.note)+'</div>' : '';
+      return '<div style="margin-bottom:11px"><b style="font-family:var(--marker);color:'+col+'">'+who+'</b>'+note
         +'<div style="white-space:pre-wrap;word-break:break-word">'+esc(String(m.content==null?'':m.content))+'</div></div>';
     }).join('');
     el.scrollTop = el.scrollHeight;
@@ -739,6 +740,11 @@ const PAGE = String.raw`<!doctype html>
     fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
     .then(function(resp){
       if(!resp.ok || !resp.body){ return resp.text().then(function(t){ fail(resp.status,t); }); }
+      // If the gateway fell back to a different model, label the reply honestly.
+      if(resp.headers.get('X-KeyPool-Fallback')){
+        var actual=resp.headers.get('X-KeyPool-Model')||'';
+        if(actual && actual!==(payload.model||'')) asst.note='所选模型暂不可用,已自动改用 '+actual;
+      }
       var reader=resp.body.getReader(), dec=new TextDecoder(), buf='';
       (function pump(){
         return reader.read().then(function(res){

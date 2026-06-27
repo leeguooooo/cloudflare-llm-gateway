@@ -143,6 +143,10 @@ export async function callWithPool(
     ownerSub?: string | null;
     promptChars?: number;
     ctx?: { waitUntil(promise: Promise<unknown>): void };
+    /** When false, the terminal FAILURE log row is written final=0 (the caller
+     *  owns writing the single final row — used by the fallback chain so one
+     *  user request isn't counted once per attempted provider). Default true. */
+    finalOnFailure?: boolean;
   }
 ): Promise<Response> {
   const model = meta?.model ?? null;
@@ -150,6 +154,7 @@ export async function callWithPool(
   const ownerSub = meta?.ownerSub ?? null;
   const promptChars = meta?.promptChars ?? null;
   const ctx = meta?.ctx ?? null;
+  const finalOnFailure = meta?.finalOnFailure ?? true;
   let keys = await listActiveKeys(env, provider);
 
   // Inline unattended recovery: with no CF cron available, revive any keys whose
@@ -164,7 +169,7 @@ export async function callWithPool(
   if (keys.length === 0) {
     await logRequest(env, {
       provider, keyId: null, model, tokenId, ownerSub,
-      statusCode: null, latencyMs: null, ok: false, final: true,
+      statusCode: null, latencyMs: null, ok: false, final: finalOnFailure,
     });
     return noKeysResponse(provider);
   }
@@ -338,7 +343,7 @@ export async function callWithPool(
 
   await logRequest(env, {
     provider, keyId: null, model, tokenId, ownerSub,
-    statusCode: lastStatus, latencyMs: null, ok: false, final: true,
+    statusCode: lastStatus, latencyMs: null, ok: false, final: finalOnFailure,
   });
   return exhaustedResponse(provider);
 }

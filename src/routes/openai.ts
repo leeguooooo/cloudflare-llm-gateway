@@ -8,7 +8,7 @@ import { routeModelToProvider } from "../providers/types";
 import { getAdapter } from "../providers";
 import { callWithPool } from "../keypool";
 import { requireUser, resolveCaller } from "../auth";
-import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro, providersWithActiveKeys } from "../db";
+import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro, providersWithActiveKeys, logRequest } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -65,15 +65,25 @@ app.post("/chat/completions", async (c) => {
   }, 0);
   // Auto-fallback: try the requested provider first, then any other provider
   // that currently has active keys (using its default model), so a user never
-  // gets a 503 when one provider is down/throttled.
+  // gets a 503 when one provider is down/throttled. Disable per-request with
+  // {"fallback": false} (e.g. when a specific model is required).
+  const allowFallback = (body as { fallback?: unknown }).fallback !== false;
+  // Strip the gateway-only `fallback` flag so it never leaks into upstream payloads.
+  if ("fallback" in body) delete (body as { fallback?: unknown }).fallback;
   const avail = await providersWithActiveKeys(c.env);
   const order: Provider[] = [provider];
-  for (const p of PROVIDERS) {
-    if (p !== provider && avail.has(p)) order.push(p);
+  if (allowFallback) {
+    for (const p of PROVIDERS) {
+      if (p !== provider && avail.has(p)) order.push(p);
+    }
   }
 
   let res: Response | null = null;
-  for (const prov of order) {
+  let servedBy: Provider = provider;
+  let servedModel = body.model;
+  let fellBack = false;
+  for (let i = 0; i < order.length; i++) {
+    const prov = order[i];
     const adapter = getAdapter(prov);
     const useModel = prov === provider ? body.model : adapter.models()[0];
     const reqBody: OpenAIChatRequest = prov === provider ? body : { ...body, model: useModel };
@@ -87,16 +97,43 @@ app.post("/chat/completions", async (c) => {
         ownerSub: caller.ownerSub,
         ctx: c.executionCtx,
         promptChars,
+        // The fallback chain owns the single final log row (written below on
+        // total failure); per-attempt failures must not each count as a request.
+        finalOnFailure: false,
       },
     );
-    if (res.status >= 200 && res.status <= 299) break; // success (incl. stream)
+    if (res.status >= 200 && res.status <= 299) {
+      servedBy = prov;
+      servedModel = useModel;
+      fellBack = i > 0;
+      break;
+    }
   }
 
   if (!res) {
     return c.json({ error: { message: "no providers available", type: "upstream_unavailable" } }, 503);
   }
-  if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
+  const ok = res.status >= 200 && res.status <= 299;
+  if (!ok) {
+    // Every provider failed — write exactly one final row for this user request.
+    await logRequest(c.env, {
+      provider, keyId: null, model: body.model, tokenId: caller.tokenId,
+      ownerSub: caller.ownerSub, statusCode: res.status, latencyMs: null, ok: false, final: true,
+    });
+  }
+  if (caller.tokenId !== null && ok) {
     await incrementTokenUse(c.env, caller.tokenId);
+  }
+  if (ok) {
+    // Surface who actually served the request (transparency for fallback).
+    // Sanitize the model (user-controlled) so an invalid header value can't
+    // throw on Headers.set after the request was already charged.
+    const safeModel = String(servedModel).replace(/[^\x20-\x7E]/g, "").slice(0, 200);
+    const out = new Response(res.body, res);
+    out.headers.set("X-KeyPool-Provider", servedBy);
+    out.headers.set("X-KeyPool-Model", safeModel);
+    if (fellBack) out.headers.set("X-KeyPool-Fallback", "1");
+    return out;
   }
   return res;
 });
