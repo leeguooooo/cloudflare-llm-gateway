@@ -1,7 +1,7 @@
 /** OpenAI-compatible routes: `/v1/models` + `/v1/chat/completions`. User auth. */
 
 import { Hono } from "hono";
-import type { Env } from "../types";
+import type { Env, Provider } from "../types";
 import { PROVIDERS } from "../types";
 import type { OpenAIChatRequest } from "../providers/types";
 import { routeModelToProvider } from "../providers/types";
@@ -63,18 +63,38 @@ app.post("/chat/completions", async (c) => {
     const content: unknown = m.content;
     return sum + (typeof content === "string" ? content.length : JSON.stringify(content).length);
   }, 0);
-  const res = await callWithPool(
-    c.env,
-    provider,
-    (key) => getAdapter(provider).chatCompletions(body, key),
-    {
-      model: body.model,
-      tokenId: caller.tokenId,
-      ownerSub: caller.ownerSub,
-      ctx: c.executionCtx,
-      promptChars,
-    },
-  );
+  // Auto-fallback: try the requested provider first, then any other provider
+  // that currently has active keys (using its default model), so a user never
+  // gets a 503 when one provider is down/throttled.
+  const avail = await providersWithActiveKeys(c.env);
+  const order: Provider[] = [provider];
+  for (const p of PROVIDERS) {
+    if (p !== provider && avail.has(p)) order.push(p);
+  }
+
+  let res: Response | null = null;
+  for (const prov of order) {
+    const adapter = getAdapter(prov);
+    const useModel = prov === provider ? body.model : adapter.models()[0];
+    const reqBody: OpenAIChatRequest = prov === provider ? body : { ...body, model: useModel };
+    res = await callWithPool(
+      c.env,
+      prov,
+      (key) => adapter.chatCompletions(reqBody, key),
+      {
+        model: useModel,
+        tokenId: caller.tokenId,
+        ownerSub: caller.ownerSub,
+        ctx: c.executionCtx,
+        promptChars,
+      },
+    );
+    if (res.status >= 200 && res.status <= 299) break; // success (incl. stream)
+  }
+
+  if (!res) {
+    return c.json({ error: { message: "no providers available", type: "upstream_unavailable" } }, 503);
+  }
   if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
     await incrementTokenUse(c.env, caller.tokenId);
   }
