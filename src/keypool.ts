@@ -91,6 +91,10 @@ export async function callWithPool(
   }
 
   if (keys.length === 0) {
+    await logRequest(env, {
+      provider, keyId: null, model, tokenId, ownerSub,
+      statusCode: null, latencyMs: null, ok: false, final: true,
+    });
     return noKeysResponse(provider);
   }
 
@@ -102,6 +106,7 @@ export async function callWithPool(
   };
 
   let attempts = 0;
+  let lastStatus: number | null = null;
 
   for (const key of keys) {
     if (attempts >= limit) break;
@@ -127,6 +132,7 @@ export async function callWithPool(
         statusCode: null,
         latencyMs,
         ok: false,
+        final: false,
       });
       continue;
     }
@@ -134,9 +140,22 @@ export async function callWithPool(
     const latencyMs = Date.now() - started;
     const status = res.status;
 
-    // Success (including streaming): return the Response untouched.
+    // Success (including streaming): return the Response untouched. For a
+    // non-streaming JSON body, peek at usage.total_tokens for billing.
     if (status >= 200 && status <= 299) {
       await recordSuccess(env, key.id);
+      let totalTokens: number | null = null;
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        try {
+          const j = (await res.clone().json()) as { usage?: { total_tokens?: number } };
+          if (j && j.usage && typeof j.usage.total_tokens === "number") {
+            totalTokens = j.usage.total_tokens;
+          }
+        } catch {
+          // usage is best-effort; never block the response
+        }
+      }
       await logRequest(env, {
         provider,
         keyId: key.id,
@@ -146,6 +165,8 @@ export async function callWithPool(
         statusCode: status,
         latencyMs,
         ok: true,
+        totalTokens,
+        final: true,
       });
       return res;
     }
@@ -164,18 +185,26 @@ export async function callWithPool(
     }
 
     await applyOutcome(env, key.id, outcome, opts);
+    lastStatus = status;
     await logRequest(env, {
       provider,
       keyId: key.id,
       model,
+      tokenId,
+      ownerSub,
       statusCode: status,
       latencyMs,
       ok: false,
+      final: false,
     });
 
     // Move on to the next key (re-fetch happens inside attempt()).
   }
 
+  await logRequest(env, {
+    provider, keyId: null, model, tokenId, ownerSub,
+    statusCode: lastStatus, latencyMs: null, ok: false, final: true,
+  });
   return exhaustedResponse(provider);
 }
 

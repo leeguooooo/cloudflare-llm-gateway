@@ -53,8 +53,9 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_request_logs (
   token_id    INTEGER,
   owner_sub   TEXT,
   total_tokens INTEGER,
-  created_at  INTEGER NOT NULL
+  final       INTEGER NOT NULL DEFAULT 0,  created_at  INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_created ON keypool_gateway_request_logs(created_at);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_owner ON keypool_gateway_request_logs(owner_sub, created_at);
+CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_final ON keypool_gateway_request_logs(final, created_at);
