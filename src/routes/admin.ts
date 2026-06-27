@@ -378,7 +378,10 @@ async function probeKey(
       const total = j?.data?.total_credits ?? null;
       const usage = j?.data?.total_usage ?? null;
       const remaining = total !== null && usage !== null ? total - usage : null;
-      return { alive: r.ok, status: r.status, rateLimited: false, balance: { remaining, total, usage, unit: "credits" } };
+      // /credits returns 200 even with a negative balance; treat ≤0 as dead so
+      // check-all disables it (otherwise every chat 402s).
+      const alive = r.ok && (remaining === null || remaining > 0);
+      return { alive, status: r.status, rateLimited: false, balance: { remaining, total, usage, unit: "credits" }, error: alive ? undefined : "余额不足" };
     }
     if (provider === "mistral") {
       const r = await fetch("https://api.mistral.ai/v1/models", { headers: { authorization: `Bearer ${key}` } });
@@ -403,8 +406,20 @@ async function probeKey(
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
     if (provider === "moonshot") {
-      const r = await fetch("https://api.moonshot.cn/v1/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+      // /models returns 200 even when the account is suspended for low balance;
+      // probe with a 1-token chat to catch it.
+      const r = await fetch("https://api.moonshot.cn/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshot-v1-8k", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        const arrears = /insufficient|balance|余额|exceeded_current_quota/i.test(t);
+        return { alive: false, status: r.status, rateLimited: r.status === 429 && !arrears, balance: null, error: arrears ? "欠费/余额不足" : `http ${r.status}` };
+      }
+      return { alive: true, status: r.status, rateLimited: false, balance: null };
     }
     if (provider === "qwen") {
       // /models returns 200 even when the account is in arrears; only inference
