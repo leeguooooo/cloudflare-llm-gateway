@@ -27,6 +27,7 @@ import {
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
+import { probeKey, runCheckAll } from "../probe";
 import { getAdapter } from "../providers";
 import type { OpenAIChatRequest } from "../providers/types";
 
@@ -293,30 +294,7 @@ app.get("/keys/list", async (c) => {
 // limit); revive the ones that pass, disable dead ones. (Outside /keys/ to avoid
 // colliding with the /keys/:id param routes.)
 app.post("/check-all-keys", async (c) => {
-  const all = await listAllKeys(c.env);
-  const subset = all.slice(0, 48); // stay under the Worker subrequest cap
-  const results = await Promise.all(
-    subset.map(async (k) => {
-      try {
-        const r = await probeKey(k.provider, k.api_key);
-        if (r.alive && !r.rateLimited && k.status !== "active") {
-          await reactivateKey(c.env, k.id);
-        } else if (!r.alive && !r.rateLimited && k.status === "active") {
-          await applyOutcome(
-            c.env,
-            k.id,
-            { kind: "disable", reason: r.error || `http ${r.status}` },
-            { cooldownMinutes: cooldownMinutes(c.env), maxConsecutive: MAX_CONSECUTIVE_FAILS }
-          );
-        }
-        return r.alive;
-      } catch {
-        return false;
-      }
-    })
-  );
-  const alive = results.filter(Boolean).length;
-  return c.json({ checked: results.length, alive, dead: results.length - alive, capped: all.length > subset.length });
+  return c.json(await runCheckAll(c.env));
 });
 
 // POST /keys/:id/chat — chat directly through ONE specific key (bypasses the
@@ -356,108 +334,6 @@ app.delete("/keys/:id", async (c) => {
   return c.json({ ok }, ok ? 200 : 404);
 });
 
-interface KeyBalance {
-  remaining: number | null;
-  total: number | null;
-  usage: number | null;
-  unit: string;
-}
-
-/** Live-probe one key. OpenRouter also returns real balance; others probe liveness. */
-async function probeKey(
-  provider: Provider,
-  key: string
-): Promise<{ alive: boolean; status: number; rateLimited: boolean; balance: KeyBalance | null; error?: string }> {
-  try {
-    if (provider === "openrouter") {
-      const r = await fetch("https://openrouter.ai/api/v1/credits", {
-        headers: { authorization: `Bearer ${key}` },
-      });
-      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
-      const j = (await r.json().catch(() => null)) as { data?: { total_credits?: number; total_usage?: number } } | null;
-      const total = j?.data?.total_credits ?? null;
-      const usage = j?.data?.total_usage ?? null;
-      const remaining = total !== null && usage !== null ? total - usage : null;
-      // /credits returns 200 even with a negative balance; treat ≤0 as dead so
-      // check-all disables it (otherwise every chat 402s).
-      const alive = r.ok && (remaining === null || remaining > 0);
-      return { alive, status: r.status, rateLimited: false, balance: { remaining, total, usage, unit: "credits" }, error: alive ? undefined : "余额不足" };
-    }
-    if (provider === "mistral") {
-      const r = await fetch("https://api.mistral.ai/v1/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
-    }
-    if (provider === "openai") {
-      const r = await fetch("https://api.openai.com/v1/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
-    }
-    if (provider === "deepseek") {
-      const r = await fetch("https://api.deepseek.com/user/balance", { headers: { authorization: `Bearer ${key}` } });
-      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
-      if (!r.ok) return { alive: false, status: r.status, rateLimited: r.status === 429, balance: null, error: `http ${r.status}` };
-      const j = (await r.json().catch(() => null)) as { balance_infos?: Array<{ total_balance?: string | number; currency?: string }> } | null;
-      const info = j?.balance_infos?.[0] ?? null;
-      const remaining = info && info.total_balance != null ? Number(info.total_balance) : null;
-      const unit = info?.currency ?? "USD";
-      return { alive: true, status: r.status, rateLimited: false, balance: { remaining, total: null, usage: null, unit } };
-    }
-    if (provider === "groq") {
-      const r = await fetch("https://api.groq.com/openai/v1/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
-    }
-    if (provider === "moonshot") {
-      // /models returns 200 even when the account is suspended for low balance;
-      // probe with a 1-token chat to catch it.
-      const r = await fetch("https://api.moonshot.cn/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: "moonshot-v1-8k", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
-      });
-      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        const arrears = /insufficient|balance|余额|exceeded_current_quota/i.test(t);
-        return { alive: false, status: r.status, rateLimited: r.status === 429 && !arrears, balance: null, error: arrears ? "欠费/余额不足" : `http ${r.status}` };
-      }
-      return { alive: true, status: r.status, rateLimited: false, balance: null };
-    }
-    if (provider === "qwen") {
-      // /models returns 200 even when the account is in arrears; only inference
-      // is blocked. Probe with a 1-token chat so 欠费 is actually caught.
-      const r = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: "qwen-turbo", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
-      });
-      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        const arrears = /arrearage|overdue|欠费|insufficient/i.test(t);
-        return { alive: false, status: r.status, rateLimited: r.status === 429, balance: null, error: arrears ? "欠费/余额不足" : `http ${r.status}` };
-      }
-      return { alive: true, status: r.status, rateLimited: false, balance: null };
-    }
-    if (provider === "glm") {
-      // GLM has no reliable models endpoint; probe with a 1-token chat.
-      const r = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: "glm-4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
-      });
-      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
-    }
-    // gemini
-    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-      headers: { "x-goog-api-key": key },
-    });
-    const rateLimited = r.status === 429;
-    const alive = r.ok || rateLimited; // 429 = valid key, just throttled
-    return { alive, status: r.status, rateLimited, balance: null, error: alive ? undefined : `http ${r.status}` };
-  } catch (err) {
-    return { alive: false, status: 0, rateLimited: false, balance: null, error: String(err instanceof Error ? err.message : err) };
-  }
-}
 
 // POST /keys/:id/check — live liveness + balance probe. Revives the key if alive.
 app.post("/keys/:id/check", async (c) => {
