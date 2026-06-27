@@ -14,7 +14,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env, Provider } from "../types";
-import { requireUser } from "../auth";
+import { requireUser, resolveCaller } from "../auth";
 import { callWithPool } from "../keypool";
 import { getAdapter } from "../providers";
 
@@ -38,11 +38,15 @@ function computeSubPath(c: Context<AppEnv>, provider: Provider): string {
 }
 
 function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
-  return (c: Context<AppEnv>): Promise<Response> => {
+  return async (c: Context<AppEnv>): Promise<Response> => {
     const subPath = computeSubPath(c, provider);
     const req = c.req.raw;
-    return callWithPool(c.env, provider, (key: string) =>
-      getAdapter(provider).passthrough(subPath, req, key)
+    const caller = await resolveCaller(c.env, req);
+    return callWithPool(
+      c.env,
+      provider,
+      (key: string) => getAdapter(provider).passthrough(subPath, req, key),
+      { tokenId: caller.tokenId, ownerSub: caller.ownerSub }
     );
   };
 }

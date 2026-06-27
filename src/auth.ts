@@ -2,8 +2,26 @@
 
 import type { MiddlewareHandler } from "hono";
 import type { Env, Role } from "./types";
-import { resolveToken } from "./db";
-import { sessionRole } from "./oidc";
+import { resolveToken, resolveTokenFull } from "./db";
+import { sessionRole, getSession } from "./oidc";
+
+/**
+ * Identify the caller of a request for usage attribution: a bearer token maps to
+ * its token id + owner; an SSO session cookie maps to the user's sub (no token).
+ */
+export async function resolveCaller(
+  env: Env,
+  req: Request
+): Promise<{ tokenId: number | null; ownerSub: string | null }> {
+  const token = extractToken(req);
+  if (token) {
+    const full = await resolveTokenFull(env, token);
+    if (full) return { tokenId: full.id, ownerSub: full.ownerSub };
+  }
+  const sess = await getSession(env, req);
+  if (sess) return { tokenId: null, ownerSub: sess.sub };
+  return { tokenId: null, ownerSub: null };
+}
 
 /** Hono generics shared by auth-protected routes (exposes `role` via c.get). */
 type AuthEnv = { Bindings: Env; Variables: { role: Role } };

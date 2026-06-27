@@ -7,7 +7,7 @@ import type { OpenAIChatRequest } from "../providers/types";
 import { routeModelToProvider } from "../providers/types";
 import { getAdapter } from "../providers";
 import { callWithPool } from "../keypool";
-import { requireUser } from "../auth";
+import { requireUser, resolveCaller } from "../auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -44,11 +44,12 @@ app.post("/chat/completions", async (c) => {
   }
 
   const provider = routeModelToProvider(body.model);
+  const caller = await resolveCaller(c.env, c.req.raw);
   return callWithPool(
     c.env,
     provider,
     (key) => getAdapter(provider).chatCompletions(body, key),
-    { model: body.model },
+    { model: body.model, tokenId: caller.tokenId, ownerSub: caller.ownerSub },
   );
 });
 

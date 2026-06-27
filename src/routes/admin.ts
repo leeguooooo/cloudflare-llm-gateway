@@ -17,6 +17,8 @@ import {
   listAllKeys,
   getKeyById,
   deleteKey,
+  usageSummary,
+  recentLogs,
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
@@ -108,6 +110,17 @@ app.post("/keys/import", async (c) => {
 app.get("/keys", async (c) => {
   const summary = await statsSummary(c.env);
   return c.json(summary);
+});
+
+// GET /usage — global usage aggregates (last 30 days).
+app.get("/usage", async (c) => {
+  const sinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  return c.json(await usageSummary(c.env, { sinceMs }));
+});
+
+// GET /logs — most recent requests across all callers.
+app.get("/logs", async (c) => {
+  return c.json(await recentLogs(c.env, { limit: 100 }));
 });
 
 // POST /probe — run the unattended health check on demand (revive expired

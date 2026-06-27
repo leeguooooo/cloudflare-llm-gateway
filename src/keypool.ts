@@ -74,9 +74,11 @@ export async function callWithPool(
   env: Env,
   provider: Provider,
   attempt: (key: string) => Promise<Response>,
-  meta?: { model?: string }
+  meta?: { model?: string; tokenId?: number | null; ownerSub?: string | null }
 ): Promise<Response> {
   const model = meta?.model ?? null;
+  const tokenId = meta?.tokenId ?? null;
+  const ownerSub = meta?.ownerSub ?? null;
   let keys = await listActiveKeys(env, provider);
 
   // Inline unattended recovery: with no CF cron available, revive any keys whose
@@ -120,6 +122,8 @@ export async function callWithPool(
         provider,
         keyId: key.id,
         model,
+        tokenId,
+        ownerSub,
         statusCode: null,
         latencyMs,
         ok: false,
@@ -137,6 +141,8 @@ export async function callWithPool(
         provider,
         keyId: key.id,
         model,
+        tokenId,
+        ownerSub,
         statusCode: status,
         latencyMs,
         ok: true,

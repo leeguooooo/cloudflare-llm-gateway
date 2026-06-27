@@ -420,6 +420,51 @@ const PAGE = String.raw`<!doctype html>
         </div>
       </section>
 
+      <!-- ----- consumer: 用量 ----- -->
+      <section class="section" id="sec-usage">
+        <h2 class="sec-h">用量</h2>
+        <p class="sec-sub">// 近 30 天 · 你自己的调用</p>
+        <div class="grid3">
+          <div class="stat s-a"><div class="lbl">总请求</div><div class="num" id="u-total">–</div></div>
+          <div class="stat s-c"><div class="lbl">成功率</div><div class="num" id="u-rate">–</div></div>
+          <div class="stat s-d"><div class="lbl">最近一天</div><div class="num" id="u-today">–</div></div>
+        </div>
+        <div class="card r1" style="margin-top:14px">
+          <h2 class="h-green"><span class="hd"></span>按供应商</h2>
+          <table><thead><tr><th>供应商</th><th>请求</th><th>成功</th><th>平均延迟</th></tr></thead>
+          <tbody id="u-byprov"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+        </div>
+        <div class="card r2" style="margin-top:14px">
+          <h2 class="h-blue"><span class="hd"></span>最近请求</h2>
+          <table><thead><tr><th>时间</th><th>供应商</th><th>模型</th><th>状态</th><th>延迟</th></tr></thead>
+          <tbody id="u-recent"><tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+        </div>
+      </section>
+
+      <!-- ----- admin: 日志 ----- -->
+      <section class="section" id="sec-logs">
+        <h2 class="sec-h">日志</h2>
+        <p class="sec-sub">// 近 30 天 · 全部调用</p>
+        <div class="grid3">
+          <div class="stat s-a"><div class="lbl">总请求</div><div class="num" id="l-total">–</div></div>
+          <div class="stat s-c"><div class="lbl">成功率</div><div class="num" id="l-rate">–</div></div>
+          <div class="stat s-d"><div class="lbl">最近一天</div><div class="num" id="l-today">–</div></div>
+        </div>
+        <div class="card r1" style="margin-top:14px">
+          <h2 class="h-green"><span class="hd"></span>按供应商
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="logs-refresh">刷新</button>
+          </h2>
+          <table><thead><tr><th>供应商</th><th>请求</th><th>成功</th><th>平均延迟</th></tr></thead>
+          <tbody id="l-byprov"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+        </div>
+        <div class="card r2" style="margin-top:14px">
+          <h2 class="h-blue"><span class="hd"></span>最近请求</h2>
+          <table><thead><tr><th>时间</th><th>供应商</th><th>模型</th><th>状态</th><th>延迟</th></tr></thead>
+          <tbody id="l-recent"><tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>
@@ -481,6 +526,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'dashboard', label:'控制台', color:'red'},
       {id:'tokens',    label:'我的令牌', color:'blue'},
       {id:'models',    label:'模型', color:'green'},
+      {id:'usage',     label:'用量', color:'amber'},
       {id:'docs',      label:'文档', color:'yellow'}
     ],
     admin: [
@@ -489,6 +535,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'keylist',     label:'Key 列表', color:'red'},
       {id:'users',       label:'用户', color:'blue'},
       {id:'admintokens', label:'令牌', color:'green'},
+      {id:'logs',        label:'日志', color:'amber'},
       {id:'docs',        label:'文档', color:'amber'}
     ]
   };
@@ -521,6 +568,40 @@ const PAGE = String.raw`<!doctype html>
     if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
+    if(id==='usage') loadUserUsage();
+    if(id==='logs'){ var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage; loadAdminUsage(); }
+  }
+
+  // ---------------- usage / logs (shared renderers) ----------------
+  function pct(ok,n){ return n>0 ? Math.round(ok/n*100)+'%' : '–'; }
+  function renderUsage(d, p){
+    $(p+'-total').textContent = d.total||0;
+    $(p+'-rate').textContent = pct(d.ok||0, d.total||0);
+    var last = (d.byDay && d.byDay[0]) ? d.byDay[0].n : 0;
+    $(p+'-today').textContent = last;
+    var rows=(d.byProvider||[]).map(function(x){
+      return '<tr><td style="font-weight:700">'+esc(x.provider)+'</td><td class="n">'+x.n+'</td>'
+        +'<td class="n">'+x.ok+'</td><td class="n">'+Math.round(x.avg_latency||0)+'ms</td></tr>';
+    }).join('');
+    $(p+'-byprov').innerHTML = rows || '<tr><td colspan="4" style="color:var(--faint)">暂无</td></tr>';
+  }
+  function renderRecent(rows, tbodyId){
+    var html=(rows||[]).map(function(r){
+      var t=new Date(r.created_at).toISOString().slice(5,16).replace('T',' ');
+      var okc=r.ok?'var(--green)':'var(--red)';
+      return '<tr><td style="color:var(--faint)">'+t+'</td><td>'+esc(r.provider)+'</td>'
+        +'<td>'+esc(r.model||'–')+'</td><td style="color:'+okc+'">'+(r.status_code==null?'–':r.status_code)+'</td>'
+        +'<td class="n">'+(r.latency_ms==null?'–':r.latency_ms+'ms')+'</td></tr>';
+    }).join('');
+    $(tbodyId).innerHTML = html || '<tr><td colspan="5" style="color:var(--faint)">暂无</td></tr>';
+  }
+  function loadUserUsage(){
+    api('/me/usage').then(function(r){ if(r.ok) renderUsage(r.body,'u'); });
+    api('/me/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); });
+  }
+  function loadAdminUsage(){
+    api('/admin/usage').then(function(r){ if(r.ok) renderUsage(r.body,'l'); });
+    api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent'); });
   }
 
   // ---------------- admin: per-key list ----------------

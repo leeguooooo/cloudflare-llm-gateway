@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_request_logs (
   status_code INTEGER,
   latency_ms  INTEGER,
   ok          INTEGER NOT NULL DEFAULT 0,
+  token_id    INTEGER,
+  owner_sub   TEXT,
+  total_tokens INTEGER,
   created_at  INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_created ON keypool_gateway_request_logs(created_at);
+CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_owner ON keypool_gateway_request_logs(owner_sub, created_at);

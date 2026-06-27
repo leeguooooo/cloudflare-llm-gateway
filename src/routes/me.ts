@@ -14,6 +14,8 @@ import {
   createToken,
   deleteOwnedToken,
   getUserBySub,
+  usageSummary,
+  recentLogs,
 } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -79,6 +81,25 @@ app.delete("/tokens/:id", async (c) => {
     return c.json({ error: { message: "令牌不存在", type: "not_found" } }, 404);
   }
   return c.json({ ok: true });
+});
+
+// GET /usage — the caller's own usage aggregates (last 30 days).
+app.get("/usage", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+  const sinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  return c.json(await usageSummary(c.env, { ownerSub: session.sub, sinceMs }));
+});
+
+// GET /logs — the caller's own recent requests.
+app.get("/logs", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+  return c.json(await recentLogs(c.env, { ownerSub: session.sub, limit: 50 }));
 });
 
 export default app;
