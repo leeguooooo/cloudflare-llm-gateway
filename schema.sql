@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_request_logs (
   token_id    INTEGER,
   owner_sub   TEXT,
   total_tokens INTEGER,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
   final       INTEGER NOT NULL DEFAULT 0,  created_at  INTEGER NOT NULL
 );
 
@@ -75,11 +77,19 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_transactions (
   model               TEXT,
   tokens              INTEGER,
   note                TEXT,
+  estimated           INTEGER NOT NULL DEFAULT 0,
   created_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_txn_sub ON keypool_gateway_transactions(sub, created_at);
 
 CREATE TABLE IF NOT EXISTS keypool_gateway_prices (
   model                TEXT PRIMARY KEY,
-  price_per_mtok_micro INTEGER NOT NULL          -- micro-USD per 1M tokens
+  price_per_mtok_micro INTEGER NOT NULL,
+  input_per_mtok_micro INTEGER,
+  output_per_mtok_micro INTEGER          -- micro-USD per 1M tokens
+);
+
+CREATE TABLE IF NOT EXISTS keypool_gateway_payment_events (
+  event_id   TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
 );

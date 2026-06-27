@@ -43,6 +43,13 @@ export interface Env {
   BILLING_ENABLED?: string;
   /** Fallback price (micro-USD per 1M tokens) when a model isn't in the prices table. */
   DEFAULT_PRICE_MICRO?: string;
+  /** Stripe (Worker secrets) — online top-up; unset = payment disabled. */
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  /** Public base URL for Stripe success/cancel redirects, e.g. https://ai.example.com */
+  PUBLIC_BASE_URL?: string;
+  /** ISO currency for top-ups (default "usd"). */
+  CURRENCY?: string;
 }
 
 export interface ApiKeyRow {

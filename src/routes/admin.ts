@@ -399,25 +399,48 @@ app.get("/transactions", async (c) => {
   return c.json(await listTransactions(c.env, { limit: 100 }));
 });
 
-// GET /prices — list per-model token prices (micro-USD per 1M tokens).
+// GET /prices — list per-model token prices (micro-USD per 1M tokens, all columns).
 app.get("/prices", async (c) => {
   const res = await c.env.DB.prepare(
-    `SELECT model, price_per_mtok_micro FROM keypool_gateway_prices ORDER BY model ASC`
+    `SELECT model, price_per_mtok_micro, input_per_mtok_micro, output_per_mtok_micro
+       FROM keypool_gateway_prices ORDER BY model ASC`
   ).all();
-  return c.json((res.results ?? []) as unknown as Array<{ model: string; price_per_mtok_micro: number }>);
+  return c.json(
+    (res.results ?? []) as unknown as Array<{
+      model: string;
+      price_per_mtok_micro: number;
+      input_per_mtok_micro: number | null;
+      output_per_mtok_micro: number | null;
+    }>
+  );
 });
 
-// POST /prices — upsert a model price. Body { model, price_per_mtok_micro }.
+// POST /prices — upsert split input/output prices for a model.
+// Body { model, input_per_mtok_micro, output_per_mtok_micro }; legacy
+// { model, price_per_mtok_micro } sets both input and output to that value.
 app.post("/prices", async (c) => {
   let model = "";
-  let price = NaN;
+  let input = NaN;
+  let output = NaN;
+  let legacy = NaN;
   try {
     const body: unknown = await c.req.json();
     if (body !== null && typeof body === "object") {
-      const b = body as { model?: unknown; price_per_mtok_micro?: unknown };
+      const b = body as {
+        model?: unknown;
+        input_per_mtok_micro?: unknown;
+        output_per_mtok_micro?: unknown;
+        price_per_mtok_micro?: unknown;
+      };
       if (typeof b.model === "string") model = b.model.trim();
+      if (typeof b.input_per_mtok_micro === "number" && Number.isFinite(b.input_per_mtok_micro)) {
+        input = b.input_per_mtok_micro;
+      }
+      if (typeof b.output_per_mtok_micro === "number" && Number.isFinite(b.output_per_mtok_micro)) {
+        output = b.output_per_mtok_micro;
+      }
       if (typeof b.price_per_mtok_micro === "number" && Number.isFinite(b.price_per_mtok_micro)) {
-        price = b.price_per_mtok_micro;
+        legacy = b.price_per_mtok_micro;
       }
     }
   } catch {
@@ -426,24 +449,49 @@ app.post("/prices", async (c) => {
       400
     );
   }
-  if (model.length === 0 || !Number.isFinite(price) || price < 0) {
+  // Legacy single price fills any unspecified side.
+  if (Number.isFinite(legacy)) {
+    if (!Number.isFinite(input)) input = legacy;
+    if (!Number.isFinite(output)) output = legacy;
+  }
+  if (
+    model.length === 0 ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
     return c.json(
       {
         error: {
-          message: "expected { model: string, price_per_mtok_micro: number }",
+          message:
+            "expected { model: string, input_per_mtok_micro: number, output_per_mtok_micro: number } (or legacy price_per_mtok_micro)",
           type: "invalid_request_error",
         },
       },
       400
     );
   }
+  const inputMicro = Math.round(input);
+  const outputMicro = Math.round(output);
+  // price_per_mtok_micro is NOT NULL legacy column — keep it in sync with input.
   await c.env.DB.prepare(
-    `INSERT INTO keypool_gateway_prices (model, price_per_mtok_micro) VALUES (?, ?)
-     ON CONFLICT(model) DO UPDATE SET price_per_mtok_micro = excluded.price_per_mtok_micro`
+    `INSERT INTO keypool_gateway_prices
+       (model, price_per_mtok_micro, input_per_mtok_micro, output_per_mtok_micro)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(model) DO UPDATE SET
+       price_per_mtok_micro = excluded.price_per_mtok_micro,
+       input_per_mtok_micro = excluded.input_per_mtok_micro,
+       output_per_mtok_micro = excluded.output_per_mtok_micro`
   )
-    .bind(model, Math.round(price))
+    .bind(model, inputMicro, inputMicro, outputMicro)
     .run();
-  return c.json({ model, price_per_mtok_micro: Math.round(price) });
+  return c.json({
+    model,
+    price_per_mtok_micro: inputMicro,
+    input_per_mtok_micro: inputMicro,
+    output_per_mtok_micro: outputMicro,
+  });
 });
 
 export default app;

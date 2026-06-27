@@ -7,7 +7,7 @@ import {
   applyOutcome,
   logRequest,
   reviveExpiredCooldowns,
-  updateLogTokens,
+  updateLogUsage,
   chargeForUsage,
 } from "./db";
 
@@ -66,6 +66,62 @@ function snippet(s: string): string {
   return t.length > 300 ? t.slice(0, 300) : t;
 }
 
+/** Normalized token usage extracted from a response body or a single SSE frame. */
+export interface ExtractedUsage {
+  prompt: number | null;
+  completion: number | null;
+  total: number | null;
+}
+
+/**
+ * Pull a usage object out of an OpenAI-shaped body/frame
+ * (`usage.{prompt_tokens,completion_tokens,total_tokens}`) or a Gemini-shaped
+ * one (`usageMetadata.{promptTokenCount,candidatesTokenCount,totalTokenCount}`).
+ * Returns all-null when no usage is present.
+ */
+export function extractUsage(jsonOrFrame: unknown): ExtractedUsage {
+  const o = jsonOrFrame as
+    | {
+        usage?: {
+          prompt_tokens?: unknown;
+          completion_tokens?: unknown;
+          total_tokens?: unknown;
+        } | null;
+        usageMetadata?: {
+          promptTokenCount?: unknown;
+          candidatesTokenCount?: unknown;
+          totalTokenCount?: unknown;
+        } | null;
+      }
+    | null
+    | undefined;
+
+  if (o && o.usage) {
+    const u = o.usage;
+    return {
+      prompt: typeof u.prompt_tokens === "number" ? u.prompt_tokens : null,
+      completion: typeof u.completion_tokens === "number" ? u.completion_tokens : null,
+      total: typeof u.total_tokens === "number" ? u.total_tokens : null,
+    };
+  }
+
+  if (o && o.usageMetadata) {
+    const m = o.usageMetadata;
+    return {
+      prompt: typeof m.promptTokenCount === "number" ? m.promptTokenCount : null,
+      completion: typeof m.candidatesTokenCount === "number" ? m.candidatesTokenCount : null,
+      total: typeof m.totalTokenCount === "number" ? m.totalTokenCount : null,
+    };
+  }
+
+  return { prompt: null, completion: null, total: null };
+}
+
+/** True when an extracted usage carries at least one token count. */
+function hasUsage(u: ExtractedUsage): boolean {
+  return u.prompt !== null || u.completion !== null || u.total !== null;
+}
+
 /**
  * Core dispatcher. Picks active keys for `provider` and calls `attempt(key)`.
  * For 2xx responses (including streams) the Response is returned untouched —
@@ -80,12 +136,14 @@ export async function callWithPool(
     model?: string;
     tokenId?: number | null;
     ownerSub?: string | null;
+    promptChars?: number;
     ctx?: { waitUntil(promise: Promise<unknown>): void };
   }
 ): Promise<Response> {
   const model = meta?.model ?? null;
   const tokenId = meta?.tokenId ?? null;
   const ownerSub = meta?.ownerSub ?? null;
+  const promptChars = meta?.promptChars ?? null;
   const ctx = meta?.ctx ?? null;
   let keys = await listActiveKeys(env, provider);
 
@@ -173,7 +231,14 @@ export async function callWithPool(
           status,
           headers: res.headers,
         });
-        const scan = scanStreamForUsage(env, scanStream, logId, ownerSub, model);
+        const scan = scanStreamForUsage(
+          env,
+          scanStream,
+          logId,
+          ownerSub,
+          model,
+          promptChars
+        );
         if (ctx) {
           ctx.waitUntil(scan);
         } else {
@@ -182,18 +247,35 @@ export async function callWithPool(
         return clientResponse;
       }
 
-      // Non-streaming JSON body: peek at usage.total_tokens for billing.
-      let totalTokens: number | null = null;
-      if (ct.includes("application/json")) {
-        try {
-          const j = (await res.clone().json()) as { usage?: { total_tokens?: number } };
-          if (j && j.usage && typeof j.usage.total_tokens === "number") {
-            totalTokens = j.usage.total_tokens;
-          }
-        } catch {
-          // usage is best-effort; never block the response
-        }
+      // Non-streaming body: bill from the usage object when present, else
+      // estimate from prompt + response character counts (~4 chars/token).
+      let usage: ExtractedUsage = { prompt: null, completion: null, total: null };
+      try {
+        usage = extractUsage(await res.clone().json());
+      } catch {
+        // not JSON / parse error — fall through to estimation
       }
+
+      let promptTokens: number;
+      let completionTokens: number;
+      let estimated: boolean;
+      if (hasUsage(usage)) {
+        promptTokens = usage.prompt ?? 0;
+        completionTokens = usage.completion ?? 0;
+        estimated = false;
+      } else {
+        estimated = true;
+        promptTokens = promptChars ? Math.ceil(promptChars / 4) : 0;
+        let completionChars = 0;
+        try {
+          completionChars = (await res.clone().text()).length;
+        } catch {
+          completionChars = 0;
+        }
+        completionTokens = Math.ceil(completionChars / 4);
+      }
+      const totalTokens = usage.total ?? promptTokens + completionTokens;
+
       await logRequest(env, {
         provider,
         keyId: key.id,
@@ -203,10 +285,19 @@ export async function callWithPool(
         statusCode: status,
         latencyMs,
         ok: true,
+        promptTokens,
+        completionTokens,
         totalTokens,
         final: true,
       });
-      await chargeForUsage(env, ownerSub, model, totalTokens);
+      await chargeForUsage(
+        env,
+        ownerSub,
+        model,
+        promptTokens,
+        completionTokens,
+        estimated
+      );
       return res;
     }
 
@@ -248,39 +339,43 @@ export async function callWithPool(
 }
 
 /**
- * Read an SSE stream to its end, parse `data:` lines for a usage object
- * (OpenAI-shaped `usage.total_tokens` or Gemini `usageMetadata.totalTokenCount`),
- * and once found persist the token count to the log row and charge the owner.
- * Best-effort: never throws.
+ * Read an SSE stream to its end, parse `data:` lines for a usage frame
+ * (OpenAI-shaped `usage` or Gemini `usageMetadata`), accumulate the streamed
+ * assistant content, then persist usage to the log row and charge the owner.
+ * When no usage frame is present, estimate from the prompt + accumulated
+ * content character counts (~4 chars/token). Best-effort: never throws.
  */
 async function scanStreamForUsage(
   env: Env,
   stream: ReadableStream<Uint8Array>,
   logId: number | null,
   ownerSub: string | null,
-  model: string | null
+  model: string | null,
+  promptChars: number | null
 ): Promise<void> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let tokens: number | null = null;
+  let usage: ExtractedUsage | null = null;
+  let contentChars = 0; // accumulated delta.content text length
+  let totalChars = 0; // fallback proxy: all decoded chars
 
   const tryParse = (jsonText: string): void => {
     const trimmed = jsonText.trim();
     if (!trimmed || trimmed === "[DONE]") return;
     try {
-      const obj = JSON.parse(trimmed) as {
-        usage?: { total_tokens?: number } | null;
-        usageMetadata?: { totalTokenCount?: number } | null;
-      };
-      if (obj && obj.usage && typeof obj.usage.total_tokens === "number") {
-        tokens = obj.usage.total_tokens;
-      } else if (
-        obj &&
-        obj.usageMetadata &&
-        typeof obj.usageMetadata.totalTokenCount === "number"
-      ) {
-        tokens = obj.usageMetadata.totalTokenCount;
+      const obj = JSON.parse(trimmed) as unknown;
+      const u = extractUsage(obj);
+      if (hasUsage(u)) {
+        usage = u;
+      }
+      // Accumulate streamed assistant content (OpenAI `choices[].delta.content`).
+      const choices = (obj as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+      if (Array.isArray(choices)) {
+        for (const ch of choices) {
+          const dc = ch?.delta?.content;
+          if (typeof dc === "string") contentChars += dc.length;
+        }
       }
     } catch {
       // non-JSON data line; ignore
@@ -303,10 +398,14 @@ async function scanStreamForUsage(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      totalChars += chunk.length;
+      buffer += chunk;
       consumeLines();
     }
-    buffer += decoder.decode();
+    const tail = decoder.decode();
+    totalChars += tail.length;
+    buffer += tail;
     consumeLines();
   } catch {
     // stream errors are non-fatal for accounting
@@ -318,11 +417,24 @@ async function scanStreamForUsage(
     }
   }
 
-  if (tokens !== null) {
+  if (usage !== null) {
+    const found: ExtractedUsage = usage;
+    const prompt = found.prompt ?? 0;
+    const completion = found.completion ?? 0;
+    const total = found.total ?? prompt + completion;
     if (logId !== null) {
-      await updateLogTokens(env, logId, tokens);
+      await updateLogUsage(env, logId, prompt, completion, total);
     }
-    await chargeForUsage(env, ownerSub, model, tokens);
+    await chargeForUsage(env, ownerSub, model, prompt, completion, false);
+  } else {
+    const prompt = promptChars ? Math.ceil(promptChars / 4) : 0;
+    const completionChars = contentChars > 0 ? contentChars : totalChars;
+    const completion = Math.ceil(completionChars / 4);
+    const total = prompt + completion;
+    if (logId !== null) {
+      await updateLogUsage(env, logId, prompt, completion, total);
+    }
+    await chargeForUsage(env, ownerSub, model, prompt, completion, true);
   }
 }
 

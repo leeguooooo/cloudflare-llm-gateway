@@ -122,4 +122,66 @@ app.get("/transactions", async (c) => {
   return c.json(await listTransactions(c.env, { sub: session.sub, limit: 50 }));
 });
 
+// POST /checkout — start a Stripe Checkout Session to top up credit.
+app.post("/checkout", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return c.json(
+      { error: { message: "payment not configured", type: "not_configured" } },
+      503
+    );
+  }
+
+  let amountUsd = 0;
+  try {
+    const body = (await c.req.json()) as { amount_usd?: unknown } | null;
+    if (body && typeof body.amount_usd === "number") amountUsd = body.amount_usd;
+  } catch {
+    // invalid body → amountUsd stays 0 and fails the check below
+  }
+  if (!(amountUsd > 0)) {
+    return c.json(
+      { error: { message: "无效的金额", type: "bad_request" } },
+      400
+    );
+  }
+
+  const base = c.env.PUBLIC_BASE_URL || new URL(c.req.url).origin;
+  const currency = c.env.CURRENCY || "usd";
+  const unitAmount = Math.round(amountUsd * 100);
+  const amountMicro = Math.round(amountUsd * 1_000_000);
+
+  const form = new URLSearchParams();
+  form.set("mode", "payment");
+  form.set("success_url", `${base}/?topup=success`);
+  form.set("cancel_url", `${base}/?topup=cancel`);
+  form.set("line_items[0][quantity]", "1");
+  form.set("line_items[0][price_data][currency]", currency);
+  form.set("line_items[0][price_data][unit_amount]", String(unitAmount));
+  form.set("line_items[0][price_data][product_data][name]", "Credit top-up");
+  form.set("metadata[sub]", session.sub);
+  form.set("metadata[amount_micro]", String(amountMicro));
+
+  const res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${c.env.STRIPE_SECRET_KEY}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: form.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return c.json({ error: { message: text, type: "stripe_error" } }, 502);
+  }
+
+  const sessionJson = (await res.json()) as { url?: string };
+  return c.json({ url: sessionJson.url });
+});
+
 export default app;

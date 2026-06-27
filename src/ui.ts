@@ -502,6 +502,24 @@ const PAGE = String.raw`<!doctype html>
             <tbody id="bill-txns-body"><tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
+        <div class="card r1">
+          <h2 class="h-yellow"><span class="hd"></span>模型价格
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="prices-refresh">刷新</button>
+          </h2>
+          <div class="row">
+            <div><label>模型</label><input id="price-model" placeholder="例如 gemini-2.0-flash" autocomplete="off" /></div>
+            <div><label>输入 $/Mtok</label><input id="price-input" type="number" step="0.0001" min="0" placeholder="例如 0.5" /></div>
+            <div><label>输出 $/Mtok</label><input id="price-output" type="number" step="0.0001" min="0" placeholder="例如 1.5" /></div>
+            <button class="btn primary" id="price-save">保存价格</button>
+          </div>
+          <div class="out" id="price-out" style="display:none"></div>
+          <table style="margin-top:14px">
+            <thead><tr><th>模型</th><th>输入 $/Mtok</th><th>输出 $/Mtok</th><th></th></tr></thead>
+            <tbody id="prices-body"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody>
+          </table>
+          <div class="hint">价格以 micro-USD 每 Mtok 存储；按输入/输出 token 分别计费。</div>
+        </div>
       </section>
 
       <!-- ----- consumer: 余额 ----- -->
@@ -518,6 +536,16 @@ const PAGE = String.raw`<!doctype html>
           </div>
         </div>
         <div class="card r2">
+          <h2 class="h-green"><span class="hd"></span>充值</h2>
+          <div class="hint" id="bal-topup-success" style="display:none; color:var(--green); margin-top:0">充值处理中，到账后余额会自动更新（可稍后点「刷新」）。</div>
+          <div class="row">
+            <div><label>金额(USD)</label><input id="bal-topup-amount" type="number" step="0.01" min="0" placeholder="例如 10" /></div>
+            <button class="btn primary" id="bal-topup-btn">充值</button>
+          </div>
+          <div class="out" id="bal-topup-out" style="display:none"></div>
+          <div class="hint">通过 Stripe 在线支付。支付成功后余额会在确认后自动到账。</div>
+        </div>
+        <div class="card r1">
           <h2 class="h-blue"><span class="hd"></span>最近流水</h2>
           <table>
             <thead><tr><th>时间</th><th>类型</th><th>金额 USD</th><th>余额 USD</th><th>模型</th><th>token</th><th>备注</th></tr></thead>
@@ -688,7 +716,7 @@ const PAGE = String.raw`<!doctype html>
   }
 
   // ---------------- admin: billing ----------------
-  function loadBilling(){ loadBalances(); loadBillingTxns(); }
+  function loadBilling(){ loadBalances(); loadBillingTxns(); loadPrices(); }
   function loadBalances(){
     var tb=$('bill-balances-body');
     return api('/admin/balances').then(function(r){
@@ -731,8 +759,65 @@ const PAGE = String.raw`<!doctype html>
     }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
   }
 
+  // ---------------- admin: model prices ----------------
+  function priceUsd(micro){ return ((micro==null?0:micro)/1000000).toFixed(4); }
+  function loadPrices(){
+    var tb=$('prices-body');
+    return api('/admin/prices').then(function(r){
+      var list=Array.isArray(r.body)?r.body:((r.body&&r.body.prices)||[]);
+      if(!Array.isArray(list)||!list.length){ tb.innerHTML='<tr><td colspan="4" style="color:var(--faint)">暂无</td></tr>'; return; }
+      tb.innerHTML=list.map(function(p){
+        var inp=p.input_per_mtok_micro!=null?p.input_per_mtok_micro:p.price_per_mtok_micro;
+        var out=p.output_per_mtok_micro!=null?p.output_per_mtok_micro:p.price_per_mtok_micro;
+        return '<tr><td style="font-weight:700" class="mono-token">'+esc(p.model)+'</td>'
+          +'<td class="n">'+priceUsd(inp)+'</td>'
+          +'<td class="n">'+priceUsd(out)+'</td>'
+          +'<td><button class="btn ghost small" data-editprice="'+esc(p.model)+'" data-pin="'+esc(priceUsd(inp))+'" data-pout="'+esc(priceUsd(out))+'">编辑</button></td></tr>';
+      }).join('');
+      Array.prototype.forEach.call(tb.querySelectorAll('[data-editprice]'), function(btn){
+        btn.onclick=function(){
+          $('price-model').value=btn.getAttribute('data-editprice');
+          $('price-input').value=btn.getAttribute('data-pin');
+          $('price-output').value=btn.getAttribute('data-pout');
+          $('price-model').focus();
+        };
+      });
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="4" class="e">出错</td></tr>'; });
+  }
+  function savePrice(){
+    var model=$('price-model').value.trim();
+    var inUsd=parseFloat($('price-input').value);
+    var outUsd=parseFloat($('price-output').value);
+    var o=$('price-out'); o.style.display='block';
+    if(!model || !(inUsd>=0) || !(outUsd>=0)){ o.innerHTML='<span class="e">请填写模型与有效价格</span>'; return; }
+    var btn=$('price-save'); btn.disabled=true;
+    var payload={ model:model, input_per_mtok_micro:Math.round(inUsd*1000000), output_per_mtok_micro:Math.round(outUsd*1000000) };
+    api('/admin/prices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){ btn.disabled=false;
+      if(!r.ok){ var msg=(r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status); o.innerHTML='<span class="e">'+esc(msg)+'</span>'; return; }
+      o.innerHTML='<span class="k">已保存</span> '+esc(model);
+      $('price-model').value=''; $('price-input').value=''; $('price-output').value='';
+      loadPrices();
+    }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
+  }
+
+  // ---------------- consumer: top-up via Stripe ----------------
+  function checkout(){
+    var amount=parseFloat($('bal-topup-amount').value);
+    var o=$('bal-topup-out'); o.style.display='block';
+    if(!(amount>0)){ o.innerHTML='<span class="e">请填写有效金额</span>'; return; }
+    var btn=$('bal-topup-btn'); btn.disabled=true;
+    api('/me/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({amount_usd:amount})})
+    .then(function(r){ btn.disabled=false;
+      if(r.status===503){ alert('支付未配置'); o.innerHTML='<span class="e">支付未配置</span>'; return; }
+      if(r.ok && r.body && r.body.url){ location.href=r.body.url; return; }
+      var msg=(r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status); o.innerHTML='<span class="e">'+esc(msg)+'</span>';
+    }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
+  }
+
   // ---------------- consumer: balance ----------------
   function loadBalance(){
+    if(/[?&]topup=success(?:&|$)/.test(location.search)){ var h=$('bal-topup-success'); if(h) h.style.display='block'; }
     api('/me/balance').then(function(r){
       var bal=(r.ok && r.body && r.body.balance_micro!=null) ? r.body.balance_micro : 0;
       $('bal-usd').textContent = usd(bal);
@@ -1003,7 +1088,10 @@ const PAGE = String.raw`<!doctype html>
   $('bill-topup').onclick = topUp;
   $('bill-balances-refresh').onclick = loadBalances;
   $('bill-txns-refresh').onclick = loadBillingTxns;
+  $('prices-refresh').onclick = loadPrices;
+  $('price-save').onclick = savePrice;
   $('bal-refresh').onclick = loadBalance;
+  $('bal-topup-btn').onclick = checkout;
   $('pending-refresh').onclick = function(){ boot(); };
 
   // ---------------- boot / routing ----------------

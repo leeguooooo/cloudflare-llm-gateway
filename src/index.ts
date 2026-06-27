@@ -17,6 +17,7 @@ import admin from "./routes/admin";
 import me from "./routes/me";
 import openai from "./routes/openai";
 import passthrough from "./routes/passthrough";
+import stripe from "./routes/stripe";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -29,6 +30,7 @@ app.get("/healthz", async (c) => {
   return c.json({ ok: true, ...stats });
 });
 
+app.route("/stripe", stripe);
 app.route("/auth", auth);
 app.route("/admin", admin);
 app.route("/me", me);

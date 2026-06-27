@@ -56,11 +56,21 @@ app.post("/chat/completions", async (c) => {
     const bal = await getBalanceMicro(c.env, caller.ownerSub);
     if (bal <= 0) return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
   }
+  const promptChars = (body.messages ?? []).reduce((sum, m) => {
+    const content: unknown = m.content;
+    return sum + (typeof content === "string" ? content.length : JSON.stringify(content).length);
+  }, 0);
   const res = await callWithPool(
     c.env,
     provider,
     (key) => getAdapter(provider).chatCompletions(body, key),
-    { model: body.model, tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx },
+    {
+      model: body.model,
+      tokenId: caller.tokenId,
+      ownerSub: caller.ownerSub,
+      ctx: c.executionCtx,
+      promptChars,
+    },
   );
   if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
     await incrementTokenUse(c.env, caller.tokenId);
