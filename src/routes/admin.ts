@@ -329,7 +329,7 @@ app.post("/keys/:id/chat", async (c) => {
   const row = await getKeyById(c.env, id);
   if (!row) return c.json({ error: { message: "key not found", type: "not_found" } }, 404);
   const body = (await c.req.json().catch(() => null)) as
-    | { messages?: unknown; model?: unknown; max_tokens?: unknown }
+    | { messages?: unknown; model?: unknown; max_tokens?: unknown; stream?: unknown }
     | null;
   if (!body || !Array.isArray(body.messages)) {
     return c.json({ error: { message: "messages required", type: "invalid_request_error" } }, 400);
@@ -341,6 +341,7 @@ app.post("/keys/:id/chat", async (c) => {
     model,
     messages: body.messages as OpenAIChatRequest["messages"],
     max_tokens,
+    stream: body.stream === true ? true : undefined,
   };
   return adapter.chatCompletions(req, row.api_key);
 });

@@ -730,6 +730,32 @@ const PAGE = String.raw`<!doctype html>
     var el=$(inputId); if(!el||el.__b) return; el.__b=1;
     el.addEventListener('keydown', function(ev){ if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); sendFn(); } });
   }
+  // streaming chat: append an assistant bubble that fills in as SSE arrives.
+  function streamChat(path, payload, logId, msgs, btn){
+    var asst={role:'assistant',content:''};
+    msgs.push(asst); renderChat(logId, msgs);
+    payload.stream=true;
+    function fail(s,t){ var j=null; try{j=JSON.parse(t);}catch(e){} asst.content='⚠ [错误 '+s+'] '+((j&&j.error&&(j.error.message||j.error))||t||''); renderChat(logId,msgs); if(btn)btn.disabled=false; }
+    fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(resp){
+      if(!resp.ok || !resp.body){ return resp.text().then(function(t){ fail(resp.status,t); }); }
+      var reader=resp.body.getReader(), dec=new TextDecoder(), buf='';
+      (function pump(){
+        return reader.read().then(function(res){
+          if(res.done){ if(!asst.content) asst.content='(无内容)'; renderChat(logId,msgs); if(btn)btn.disabled=false; return; }
+          buf+=dec.decode(res.value,{stream:true});
+          var parts=buf.split('\n'); buf=parts.pop();
+          parts.forEach(function(line){
+            line=line.trim(); if(line.indexOf('data:')!==0) return;
+            var data=line.slice(5).trim(); if(!data||data==='[DONE]') return;
+            try{ var o=JSON.parse(data); var d=o.choices&&o.choices[0]&&o.choices[0].delta; if(d&&typeof d.content==='string') asst.content+=d.content; }catch(e){}
+          });
+          renderChat(logId,msgs);
+          return pump();
+        });
+      })();
+    }).catch(function(){ asst.content=asst.content||'⚠ 网络错误'; renderChat(logId,msgs); if(btn)btn.disabled=false; });
+  }
   // consumer chat (billed)
   var chatMsgs=[];
   function initChat(){
@@ -751,11 +777,8 @@ const PAGE = String.raw`<!doctype html>
     var inp=$('chat-input'), txt=inp.value.trim(); if(!txt) return;
     var model=$('chat-model').value;
     chatMsgs.push({role:'user',content:txt}); inp.value='';
-    renderChat('chat-log', chatMsgs.concat([{role:'assistant',content:'…'}]));
     var btn=$('chat-send'); btn.disabled=true;
-    api('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:model,messages:chatMsgs})})
-    .then(function(r){ btn.disabled=false; chatMsgs.push({role:'assistant',content:chatReply(r)}); renderChat('chat-log',chatMsgs); })
-    .catch(function(){ btn.disabled=false; chatMsgs.push({role:'assistant',content:'⚠ 网络错误'}); renderChat('chat-log',chatMsgs); });
+    streamChat('/v1/chat/completions', {model:model, messages:chatMsgs.slice()}, 'chat-log', chatMsgs, btn);
   }
   // admin debug chat (specific key, no billing)
   var dbgMsgs=[];
@@ -773,12 +796,9 @@ const PAGE = String.raw`<!doctype html>
     var id=$('dbg-key').value; if(!id){ alert('先选一个 key'); return; }
     var model=$('dbg-model').value.trim();
     dbgMsgs.push({role:'user',content:txt}); inp.value='';
-    renderChat('dbg-log', dbgMsgs.concat([{role:'assistant',content:'…'}]));
     var btn=$('dbg-send'); btn.disabled=true;
-    var payload={messages:dbgMsgs}; if(model) payload.model=model;
-    api('/admin/keys/'+id+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
-    .then(function(r){ btn.disabled=false; dbgMsgs.push({role:'assistant',content:chatReply(r)}); renderChat('dbg-log',dbgMsgs); })
-    .catch(function(){ btn.disabled=false; dbgMsgs.push({role:'assistant',content:'⚠ 网络错误'}); renderChat('dbg-log',dbgMsgs); });
+    var payload={messages:dbgMsgs.slice()}; if(model) payload.model=model;
+    streamChat('/admin/keys/'+id+'/chat', payload, 'dbg-log', dbgMsgs, btn);
   }
 
   // ---------------- usage / logs (shared renderers) ----------------
