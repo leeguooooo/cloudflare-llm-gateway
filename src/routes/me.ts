@@ -16,6 +16,8 @@ import {
   getUserBySub,
   usageSummary,
   recentLogs,
+  getBalanceMicro,
+  listTransactions,
 } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -100,6 +102,24 @@ app.get("/logs", async (c) => {
     return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
   }
   return c.json(await recentLogs(c.env, { ownerSub: session.sub, limit: 50 }));
+});
+
+// GET /balance — the caller's own balance in micro-USD.
+app.get("/balance", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+  return c.json({ balance_micro: await getBalanceMicro(c.env, session.sub) });
+});
+
+// GET /transactions — the caller's own billing transactions.
+app.get("/transactions", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+  return c.json(await listTransactions(c.env, { sub: session.sub, limit: 50 }));
 });
 
 export default app;

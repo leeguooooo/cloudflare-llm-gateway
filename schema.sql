@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_users (
   role        TEXT NOT NULL DEFAULT 'user',     -- admin | user
   status      TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | blocked
   created_at  INTEGER NOT NULL,
-  approved_at INTEGER
+  approved_at INTEGER,
+  balance_micro INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_users_status ON keypool_gateway_users(status);
 
@@ -64,3 +65,21 @@ CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_created ON keypool_gateway_r
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_owner ON keypool_gateway_request_logs(owner_sub, created_at);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_final ON keypool_gateway_request_logs(final, created_at);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_logs_token ON keypool_gateway_request_logs(token_id, created_at);
+
+CREATE TABLE IF NOT EXISTS keypool_gateway_transactions (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  sub                 TEXT    NOT NULL,
+  kind                TEXT    NOT NULL,           -- topup | charge
+  amount_micro        INTEGER NOT NULL,
+  balance_after_micro INTEGER NOT NULL,
+  model               TEXT,
+  tokens              INTEGER,
+  note                TEXT,
+  created_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keypool_gateway_idx_txn_sub ON keypool_gateway_transactions(sub, created_at);
+
+CREATE TABLE IF NOT EXISTS keypool_gateway_prices (
+  model                TEXT PRIMARY KEY,
+  price_per_mtok_micro INTEGER NOT NULL          -- micro-USD per 1M tokens
+);

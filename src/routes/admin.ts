@@ -19,6 +19,9 @@ import {
   deleteKey,
   usageSummary,
   recentLogs,
+  listBalances,
+  topUpMicro,
+  listTransactions,
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
@@ -311,6 +314,24 @@ async function probeKey(
       const r = await fetch("https://api.mistral.ai/v1/models", { headers: { authorization: `Bearer ${key}` } });
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
+    if (provider === "openai") {
+      const r = await fetch("https://api.openai.com/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "deepseek") {
+      const r = await fetch("https://api.deepseek.com/user/balance", { headers: { authorization: `Bearer ${key}` } });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      if (!r.ok) return { alive: false, status: r.status, rateLimited: r.status === 429, balance: null, error: `http ${r.status}` };
+      const j = (await r.json().catch(() => null)) as { balance_infos?: Array<{ total_balance?: string | number; currency?: string }> } | null;
+      const info = j?.balance_infos?.[0] ?? null;
+      const remaining = info && info.total_balance != null ? Number(info.total_balance) : null;
+      const unit = info?.currency ?? "USD";
+      return { alive: true, status: r.status, rateLimited: false, balance: { remaining, total: null, usage: null, unit } };
+    }
+    if (provider === "groq") {
+      const r = await fetch("https://api.groq.com/openai/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
     // gemini
     const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
       headers: { "x-goog-api-key": key },
@@ -338,6 +359,91 @@ app.post("/keys/:id/check", async (c) => {
     await reactivateKey(c.env, id);
   }
   return c.json({ id, provider: row.provider, ...result });
+});
+
+// GET /balances — all consumers and their credit balances (admin overview).
+app.get("/balances", async (c) => {
+  return c.json(await listBalances(c.env));
+});
+
+// POST /balances/:sub/topup — credit a consumer's balance. Body { amount_usd, note? }.
+app.post("/balances/:sub/topup", async (c) => {
+  const sub = decodeURIComponent(c.req.param("sub"));
+  let amountUsd = 0;
+  let note: string | null = null;
+  try {
+    const body: unknown = await c.req.json();
+    if (body !== null && typeof body === "object") {
+      const b = body as { amount_usd?: unknown; note?: unknown };
+      if (typeof b.amount_usd === "number" && Number.isFinite(b.amount_usd)) amountUsd = b.amount_usd;
+      if (typeof b.note === "string") note = b.note;
+    }
+  } catch {
+    return c.json(
+      { error: { message: "invalid json body", type: "invalid_request_error" } },
+      400
+    );
+  }
+  if (amountUsd <= 0) {
+    return c.json(
+      { error: { message: "amount_usd must be positive", type: "invalid_request_error" } },
+      400
+    );
+  }
+  const balance_micro = await topUpMicro(c.env, sub, Math.round(amountUsd * 1_000_000), note);
+  return c.json({ balance_micro });
+});
+
+// GET /transactions — recent transactions across all consumers.
+app.get("/transactions", async (c) => {
+  return c.json(await listTransactions(c.env, { limit: 100 }));
+});
+
+// GET /prices — list per-model token prices (micro-USD per 1M tokens).
+app.get("/prices", async (c) => {
+  const res = await c.env.DB.prepare(
+    `SELECT model, price_per_mtok_micro FROM keypool_gateway_prices ORDER BY model ASC`
+  ).all();
+  return c.json((res.results ?? []) as unknown as Array<{ model: string; price_per_mtok_micro: number }>);
+});
+
+// POST /prices — upsert a model price. Body { model, price_per_mtok_micro }.
+app.post("/prices", async (c) => {
+  let model = "";
+  let price = NaN;
+  try {
+    const body: unknown = await c.req.json();
+    if (body !== null && typeof body === "object") {
+      const b = body as { model?: unknown; price_per_mtok_micro?: unknown };
+      if (typeof b.model === "string") model = b.model.trim();
+      if (typeof b.price_per_mtok_micro === "number" && Number.isFinite(b.price_per_mtok_micro)) {
+        price = b.price_per_mtok_micro;
+      }
+    }
+  } catch {
+    return c.json(
+      { error: { message: "invalid json body", type: "invalid_request_error" } },
+      400
+    );
+  }
+  if (model.length === 0 || !Number.isFinite(price) || price < 0) {
+    return c.json(
+      {
+        error: {
+          message: "expected { model: string, price_per_mtok_micro: number }",
+          type: "invalid_request_error",
+        },
+      },
+      400
+    );
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO keypool_gateway_prices (model, price_per_mtok_micro) VALUES (?, ?)
+     ON CONFLICT(model) DO UPDATE SET price_per_mtok_micro = excluded.price_per_mtok_micro`
+  )
+    .bind(model, Math.round(price))
+    .run();
+  return c.json({ model, price_per_mtok_micro: Math.round(price) });
 });
 
 export default app;

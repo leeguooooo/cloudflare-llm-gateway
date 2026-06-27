@@ -1,8 +1,21 @@
 /** Shared domain types — authoritative contract. Do not change signatures. */
 
-export type Provider = "gemini" | "mistral" | "openrouter";
+export type Provider =
+  | "gemini"
+  | "mistral"
+  | "openrouter"
+  | "openai"
+  | "deepseek"
+  | "groq";
 
-export const PROVIDERS: Provider[] = ["gemini", "mistral", "openrouter"];
+export const PROVIDERS: Provider[] = [
+  "gemini",
+  "mistral",
+  "openrouter",
+  "openai",
+  "deepseek",
+  "groq",
+];
 
 export interface Env {
   DB: D1Database;
@@ -26,6 +39,10 @@ export interface Env {
   BRAND_NAME?: string;
   SSO_LABEL?: string;
   SSO_NOTE?: string;
+  /** Set to "1" to enforce credit balances + charge per token. */
+  BILLING_ENABLED?: string;
+  /** Fallback price (micro-USD per 1M tokens) when a model isn't in the prices table. */
+  DEFAULT_PRICE_MICRO?: string;
 }
 
 export interface ApiKeyRow {

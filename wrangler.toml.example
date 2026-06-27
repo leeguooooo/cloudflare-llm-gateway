@@ -43,3 +43,7 @@ PROBE_INTERVAL_MINUTES = "60"
 # BRAND_NAME = "keypool"             # product name shown in the UI
 # SSO_LABEL  = "Sign in"             # login button text
 # SSO_NOTE   = "Single sign-on."     # hint under the login button
+
+# --- Optional: billing (credits) ---
+# BILLING_ENABLED = "1"             # enforce balances + charge per token
+# DEFAULT_PRICE_MICRO = "500000"    # micro-USD per 1M tokens when model not priced

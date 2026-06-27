@@ -15,6 +15,9 @@ const PROBE_PATH: Record<Provider, string> = {
   gemini: "/v1beta/models",
   mistral: "/v1/models",
   openrouter: "/v1/models",
+  openai: "/v1/models",
+  deepseek: "/v1/models",
+  groq: "/v1/models",
 };
 
 function probeIntervalMs(env: Env): number {

@@ -7,6 +7,8 @@ import {
   applyOutcome,
   logRequest,
   reviveExpiredCooldowns,
+  updateLogTokens,
+  chargeForUsage,
 } from "./db";
 
 export const DEFAULT_COOLDOWN_MINUTES = 15;
@@ -74,11 +76,17 @@ export async function callWithPool(
   env: Env,
   provider: Provider,
   attempt: (key: string) => Promise<Response>,
-  meta?: { model?: string; tokenId?: number | null; ownerSub?: string | null }
+  meta?: {
+    model?: string;
+    tokenId?: number | null;
+    ownerSub?: string | null;
+    ctx?: { waitUntil(promise: Promise<unknown>): void };
+  }
 ): Promise<Response> {
   const model = meta?.model ?? null;
   const tokenId = meta?.tokenId ?? null;
   const ownerSub = meta?.ownerSub ?? null;
+  const ctx = meta?.ctx ?? null;
   let keys = await listActiveKeys(env, provider);
 
   // Inline unattended recovery: with no CF cron available, revive any keys whose
@@ -140,12 +148,42 @@ export async function callWithPool(
     const latencyMs = Date.now() - started;
     const status = res.status;
 
-    // Success (including streaming): return the Response untouched. For a
-    // non-streaming JSON body, peek at usage.total_tokens for billing.
+    // Success (including streaming).
     if (status >= 200 && status <= 299) {
       await recordSuccess(env, key.id);
-      let totalTokens: number | null = null;
       const ct = res.headers.get("content-type") || "";
+
+      // Streaming (SSE): tee the body so we can return one half to the caller
+      // and scan the other half in the background for usage tokens.
+      if (ct.includes("text/event-stream") && res.body) {
+        const [clientStream, scanStream] = res.body.tee();
+        const logId = await logRequest(env, {
+          provider,
+          keyId: key.id,
+          model,
+          tokenId,
+          ownerSub,
+          statusCode: status,
+          latencyMs,
+          ok: true,
+          totalTokens: null,
+          final: true,
+        });
+        const clientResponse = new Response(clientStream, {
+          status,
+          headers: res.headers,
+        });
+        const scan = scanStreamForUsage(env, scanStream, logId, ownerSub, model);
+        if (ctx) {
+          ctx.waitUntil(scan);
+        } else {
+          void scan;
+        }
+        return clientResponse;
+      }
+
+      // Non-streaming JSON body: peek at usage.total_tokens for billing.
+      let totalTokens: number | null = null;
       if (ct.includes("application/json")) {
         try {
           const j = (await res.clone().json()) as { usage?: { total_tokens?: number } };
@@ -168,6 +206,7 @@ export async function callWithPool(
         totalTokens,
         final: true,
       });
+      await chargeForUsage(env, ownerSub, model, totalTokens);
       return res;
     }
 
@@ -206,6 +245,85 @@ export async function callWithPool(
     statusCode: lastStatus, latencyMs: null, ok: false, final: true,
   });
   return exhaustedResponse(provider);
+}
+
+/**
+ * Read an SSE stream to its end, parse `data:` lines for a usage object
+ * (OpenAI-shaped `usage.total_tokens` or Gemini `usageMetadata.totalTokenCount`),
+ * and once found persist the token count to the log row and charge the owner.
+ * Best-effort: never throws.
+ */
+async function scanStreamForUsage(
+  env: Env,
+  stream: ReadableStream<Uint8Array>,
+  logId: number | null,
+  ownerSub: string | null,
+  model: string | null
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let tokens: number | null = null;
+
+  const tryParse = (jsonText: string): void => {
+    const trimmed = jsonText.trim();
+    if (!trimmed || trimmed === "[DONE]") return;
+    try {
+      const obj = JSON.parse(trimmed) as {
+        usage?: { total_tokens?: number } | null;
+        usageMetadata?: { totalTokenCount?: number } | null;
+      };
+      if (obj && obj.usage && typeof obj.usage.total_tokens === "number") {
+        tokens = obj.usage.total_tokens;
+      } else if (
+        obj &&
+        obj.usageMetadata &&
+        typeof obj.usageMetadata.totalTokenCount === "number"
+      ) {
+        tokens = obj.usageMetadata.totalTokenCount;
+      }
+    } catch {
+      // non-JSON data line; ignore
+    }
+  };
+
+  const consumeLines = (): void => {
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      const t = line.replace(/\r$/, "").trim();
+      if (t.startsWith("data:")) {
+        tryParse(t.slice(5));
+      }
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      consumeLines();
+    }
+    buffer += decoder.decode();
+    consumeLines();
+  } catch {
+    // stream errors are non-fatal for accounting
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
+
+  if (tokens !== null) {
+    if (logId !== null) {
+      await updateLogTokens(env, logId, tokens);
+    }
+    await chargeForUsage(env, ownerSub, model, tokens);
+  }
 }
 
 function jsonError(status: number, message: string, type: string): Response {

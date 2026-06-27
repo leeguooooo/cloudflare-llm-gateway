@@ -5,6 +5,9 @@ import type { ProviderAdapter } from "./types";
 import gemini from "./gemini";
 import mistral from "./mistral";
 import openrouter from "./openrouter";
+import openai from "./openai";
+import deepseek from "./deepseek";
+import groq from "./groq";
 
 /** Return the adapter that serves `provider`. Throws on an unknown provider. */
 export function getAdapter(provider: Provider): ProviderAdapter {
@@ -15,6 +18,12 @@ export function getAdapter(provider: Provider): ProviderAdapter {
       return mistral;
     case "openrouter":
       return openrouter;
+    case "openai":
+      return openai;
+    case "deepseek":
+      return deepseek;
+    case "groq":
+      return groq;
     default: {
       // Exhaustiveness guard: if `Provider` grows, tsc flags this branch.
       const exhaustive: never = provider;

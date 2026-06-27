@@ -43,10 +43,30 @@ export interface ProviderAdapter {
   passthrough(subPath: string, req: Request, key: string): Promise<Response>;
 }
 
+const PROVIDER_PREFIXES: Provider[] = [
+  "gemini",
+  "mistral",
+  "openrouter",
+  "openai",
+  "deepseek",
+  "groq",
+];
+
 /** Map an OpenAI `model` string to the provider that should serve it. */
 export function routeModelToProvider(model: string): Provider {
-  const m = (model || "").toLowerCase();
+  const raw = model || "";
+  // Explicit "provider:model" prefix wins (e.g. "groq:llama-3.3-70b-versatile").
+  const colon = raw.indexOf(":");
+  if (colon > 0) {
+    const p = raw.slice(0, colon).toLowerCase();
+    if ((PROVIDER_PREFIXES as string[]).includes(p)) return p as Provider;
+  }
+  const m = raw.toLowerCase();
   if (m.startsWith("gemini")) return "gemini";
+  if (m.startsWith("gpt-") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") || m.startsWith("chatgpt")) {
+    return "openai";
+  }
+  if (m.startsWith("deepseek-")) return "deepseek";
   if (
     m.startsWith("mistral") ||
     m.startsWith("open-mistral") ||
@@ -61,4 +81,14 @@ export function routeModelToProvider(model: string): Provider {
   }
   // OpenRouter uses "vendor/model" slugs and serves as the catch-all.
   return "openrouter";
+}
+
+/** Strip a leading "provider:" routing prefix before sending upstream. */
+export function stripProviderPrefix(model: string): string {
+  const colon = (model || "").indexOf(":");
+  if (colon > 0) {
+    const p = model.slice(0, colon).toLowerCase();
+    if ((PROVIDER_PREFIXES as string[]).includes(p)) return model.slice(colon + 1);
+  }
+  return model;
 }

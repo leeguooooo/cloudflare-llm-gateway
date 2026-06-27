@@ -8,7 +8,7 @@ import { routeModelToProvider } from "../providers/types";
 import { getAdapter } from "../providers";
 import { callWithPool } from "../keypool";
 import { requireUser, resolveCaller } from "../auth";
-import { checkTokenLimits, incrementTokenUse } from "../db";
+import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -52,11 +52,15 @@ app.post("/chat/completions", async (c) => {
       return c.json({ error: { message: chk.message, type: "limit_exceeded" } }, chk.status as 429);
     }
   }
+  if (billingEnabled(c.env) && caller.ownerSub) {
+    const bal = await getBalanceMicro(c.env, caller.ownerSub);
+    if (bal <= 0) return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
+  }
   const res = await callWithPool(
     c.env,
     provider,
     (key) => getAdapter(provider).chatCompletions(body, key),
-    { model: body.model, tokenId: caller.tokenId, ownerSub: caller.ownerSub },
+    { model: body.model, tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx },
   );
   if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
     await incrementTokenUse(c.env, caller.tokenId);

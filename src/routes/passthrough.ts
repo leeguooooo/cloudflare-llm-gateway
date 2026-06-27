@@ -17,7 +17,7 @@ import type { Env, Provider } from "../types";
 import { requireUser, resolveCaller } from "../auth";
 import { callWithPool } from "../keypool";
 import { getAdapter } from "../providers";
-import { checkTokenLimits, incrementTokenUse } from "../db";
+import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro } from "../db";
 
 type AppEnv = { Bindings: Env };
 
@@ -49,11 +49,15 @@ function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
         return c.json({ error: { message: chk.message, type: "limit_exceeded" } }, chk.status as 429);
       }
     }
+    if (billingEnabled(c.env) && caller.ownerSub) {
+      const bal = await getBalanceMicro(c.env, caller.ownerSub);
+      if (bal <= 0) return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
+    }
     const res = await callWithPool(
       c.env,
       provider,
       (key: string) => getAdapter(provider).passthrough(subPath, req, key),
-      { tokenId: caller.tokenId, ownerSub: caller.ownerSub }
+      { tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx }
     );
     if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
       await incrementTokenUse(c.env, caller.tokenId);

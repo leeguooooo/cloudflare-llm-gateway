@@ -468,6 +468,64 @@ const PAGE = String.raw`<!doctype html>
         </div>
       </section>
 
+      <!-- ----- admin: 计费 ----- -->
+      <section class="section" id="sec-billing">
+        <h2 class="sec-h">计费</h2>
+        <p class="sec-sub">// 余额(micro-USD)· 充值 · 流水</p>
+        <div class="card r2">
+          <h2 class="h-red"><span class="hd"></span>充值</h2>
+          <div class="row">
+            <div><label>用户 sub</label><input id="bill-sub" placeholder="OIDC sub" autocomplete="off" /></div>
+            <div><label>金额(USD)</label><input id="bill-amount" type="number" step="0.0001" min="0" placeholder="例如 10" /></div>
+            <div><label>备注(可选)</label><input id="bill-note" placeholder="例如 手动充值" autocomplete="off" /></div>
+            <button class="btn primary" id="bill-topup">充值</button>
+          </div>
+          <div class="out" id="bill-topup-out" style="display:none"></div>
+        </div>
+        <div class="card r1">
+          <h2 class="h-green"><span class="hd"></span>余额总览
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="bill-balances-refresh">刷新</button>
+          </h2>
+          <table>
+            <thead><tr><th>邮箱</th><th>sub</th><th>余额 USD</th><th></th></tr></thead>
+            <tbody id="bill-balances-body"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="card r2">
+          <h2 class="h-blue"><span class="hd"></span>最近流水
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="bill-txns-refresh">刷新</button>
+          </h2>
+          <table>
+            <thead><tr><th>时间</th><th>sub</th><th>类型</th><th>金额 USD</th><th>余额 USD</th><th>模型</th><th>token</th><th>备注</th></tr></thead>
+            <tbody id="bill-txns-body"><tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ----- consumer: 余额 ----- -->
+      <section class="section" id="sec-balance">
+        <h2 class="sec-h">余额</h2>
+        <p class="sec-sub">// 你的额度与流水</p>
+        <div class="card r1">
+          <h2 class="h-red"><span class="hd"></span>当前余额
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="bal-refresh">刷新</button>
+          </h2>
+          <div class="grid3">
+            <div class="stat s-a"><div class="lbl">余额 USD</div><div class="num" id="bal-usd">–</div></div>
+          </div>
+        </div>
+        <div class="card r2">
+          <h2 class="h-blue"><span class="hd"></span>最近流水</h2>
+          <table>
+            <thead><tr><th>时间</th><th>类型</th><th>金额 USD</th><th>余额 USD</th><th>模型</th><th>token</th><th>备注</th></tr></thead>
+            <tbody id="bal-txns-body"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>
@@ -530,6 +588,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'tokens',    label:'我的令牌', color:'blue'},
       {id:'models',    label:'模型', color:'green'},
       {id:'usage',     label:'用量', color:'amber'},
+      {id:'balance',   label:'余额', color:'red'},
       {id:'docs',      label:'文档', color:'yellow'}
     ],
     admin: [
@@ -539,6 +598,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'users',       label:'用户', color:'blue'},
       {id:'admintokens', label:'令牌', color:'green'},
       {id:'logs',        label:'日志', color:'amber'},
+      {id:'billing',     label:'计费', color:'red'},
       {id:'docs',        label:'文档', color:'amber'}
     ]
   };
@@ -573,6 +633,8 @@ const PAGE = String.raw`<!doctype html>
     if(id==='admintokens') loadAdminTokens();
     if(id==='usage') loadUserUsage();
     if(id==='logs'){ var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage; loadAdminUsage(); }
+    if(id==='billing') loadBilling();
+    if(id==='balance') loadBalance();
   }
 
   // ---------------- usage / logs (shared renderers) ----------------
@@ -606,6 +668,81 @@ const PAGE = String.raw`<!doctype html>
   function loadAdminUsage(){
     api('/admin/usage').then(function(r){ if(r.ok) renderUsage(r.body,'l'); });
     api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent'); });
+  }
+
+  // ---------------- billing / balance (money in micro-USD) ----------------
+  function usd(micro){ return ((micro==null?0:micro)/1000000).toFixed(4); }
+  function txnRow(t, withSub){
+    var time=fmtDate(t.created_at);
+    var amtc=(t.kind==='topup')?'var(--green)':'var(--red)';
+    var sign=(t.kind==='topup')?'+':'-';
+    var cells='<td style="color:var(--faint)">'+esc(time)+'</td>';
+    if(withSub) cells+='<td style="font-family:ui-monospace,monospace;font-size:12px">'+esc(String(t.sub||'').slice(0,12))+'</td>';
+    cells+='<td>'+esc(t.kind)+'</td>'
+      +'<td class="n" style="color:'+amtc+'">'+sign+usd(Math.abs(t.amount_micro))+'</td>'
+      +'<td class="n">'+usd(t.balance_after_micro)+'</td>'
+      +'<td>'+esc(t.model||'–')+'</td>'
+      +'<td class="n">'+(t.tokens==null?'–':t.tokens)+'</td>'
+      +'<td style="color:var(--faint)">'+esc(t.note||'–')+'</td>';
+    return '<tr>'+cells+'</tr>';
+  }
+
+  // ---------------- admin: billing ----------------
+  function loadBilling(){ loadBalances(); loadBillingTxns(); }
+  function loadBalances(){
+    var tb=$('bill-balances-body');
+    return api('/admin/balances').then(function(r){
+      var list=Array.isArray(r.body)?r.body:[];
+      if(!list.length){ tb.innerHTML='<tr><td colspan="4" style="color:var(--faint)">暂无</td></tr>'; return; }
+      tb.innerHTML=list.map(function(b){
+        return '<tr><td style="font-weight:700; word-break:break-all">'+esc(b.email||'–')+'</td>'
+          +'<td style="font-family:ui-monospace,monospace;font-size:12px">'+esc(String(b.sub||'').slice(0,16))+'</td>'
+          +'<td class="n">'+usd(b.balance_micro)+'</td>'
+          +'<td><button class="btn ghost small" data-fillsub="'+esc(b.sub)+'">充值</button></td></tr>';
+      }).join('');
+      Array.prototype.forEach.call(tb.querySelectorAll('[data-fillsub]'), function(btn){
+        btn.onclick=function(){ $('bill-sub').value=btn.getAttribute('data-fillsub'); $('bill-amount').focus(); };
+      });
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="4" class="e">出错</td></tr>'; });
+  }
+  function loadBillingTxns(){
+    var tb=$('bill-txns-body');
+    return api('/admin/transactions').then(function(r){
+      var list=Array.isArray(r.body)?r.body:[];
+      if(!list.length){ tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">暂无</td></tr>'; return; }
+      tb.innerHTML=list.map(function(t){ return txnRow(t, true); }).join('');
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="8" class="e">出错</td></tr>'; });
+  }
+  function topUp(){
+    var sub=$('bill-sub').value.trim();
+    var amount=parseFloat($('bill-amount').value);
+    var note=$('bill-note').value.trim();
+    var o=$('bill-topup-out'); o.style.display='block';
+    if(!sub || !(amount>0)){ o.innerHTML='<span class="e">请填写有效的 sub 和金额</span>'; return; }
+    var btn=$('bill-topup'); btn.disabled=true;
+    var payload={amount_usd:amount}; if(note) payload.note=note;
+    api('/admin/balances/'+encodeURIComponent(sub)+'/topup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){ btn.disabled=false;
+      if(!r.ok){ var msg=(r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status); o.innerHTML='<span class="e">'+esc(msg)+'</span>'; return; }
+      var bal=(r.body&&r.body.balance_micro);
+      o.innerHTML='<span class="k">充值成功</span> 新余额 '+usd(bal)+' USD';
+      $('bill-amount').value=''; $('bill-note').value='';
+      loadBalances(); loadBillingTxns();
+    }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
+  }
+
+  // ---------------- consumer: balance ----------------
+  function loadBalance(){
+    api('/me/balance').then(function(r){
+      var bal=(r.ok && r.body && r.body.balance_micro!=null) ? r.body.balance_micro : 0;
+      $('bal-usd').textContent = usd(bal);
+    }).catch(function(){ $('bal-usd').textContent='–'; });
+    var tb=$('bal-txns-body');
+    api('/me/transactions').then(function(r){
+      var list=Array.isArray(r.body)?r.body:[];
+      if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">暂无</td></tr>'; return; }
+      tb.innerHTML=list.map(function(t){ return txnRow(t, false); }).join('');
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="7" class="e">出错</td></tr>'; });
   }
 
   // ---------------- admin: per-key list ----------------
@@ -863,6 +1000,10 @@ const PAGE = String.raw`<!doctype html>
   $('users-refresh').onclick = loadUsers;
   $('adm-mint').onclick = mintAdmin;
   $('adm-tokens-refresh').onclick = loadAdminTokens;
+  $('bill-topup').onclick = topUp;
+  $('bill-balances-refresh').onclick = loadBalances;
+  $('bill-txns-refresh').onclick = loadBillingTxns;
+  $('bal-refresh').onclick = loadBalance;
   $('pending-refresh').onclick = function(){ boot(); };
 
   // ---------------- boot / routing ----------------
