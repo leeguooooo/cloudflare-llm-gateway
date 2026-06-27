@@ -4,6 +4,8 @@ A serverless, **OpenAI-compatible LLM API gateway** for **Cloudflare Workers** �
 [new-api](https://github.com/QuantumNous/new-api) / [one-api](https://github.com/songquanpeng/one-api)
 style gateway that runs entirely on the **free tier** (Workers + D1, no server, no Redis).
 
+![cloudflare-llm-gateway — pool many AI keys behind one OpenAI-compatible API on Cloudflare](assets/hero.png)
+
 Pool many upstream AI API keys (Gemini, Mistral, OpenRouter) behind one stable
 OpenAI-compatible endpoint. Dead keys auto-disable, rate-limited keys cool down
 and auto-revive, and you get a built-in admin console + optional SSO.
@@ -25,6 +27,11 @@ client ──▶ Worker (Hono) ──▶ pick active key ──▶ upstream prov
                 ├─ D1: keys, tokens, users, logs
                 └─ cron / POST /admin/probe: revive cooldowns, probe disabled keys
 ```
+
+Keys self-heal: a `429`/quota error cools a key down, a `401`/`403` disables it,
+and both auto-revive (on a successful retry, or via the cron / `/admin/probe`).
+
+![self-healing key pool: active → cooldown on 429, active → disabled on 401, both auto-revive back to active](assets/self-healing.png)
 
 ## Setup
 
