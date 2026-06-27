@@ -16,7 +16,7 @@ export const DEFAULT_MAX_RETRIES = 4;
 export const MAX_CONSECUTIVE_FAILS = 3;
 
 const DISABLE_RE =
-  /api[_ ]?key.*(not valid|invalid)|invalid.*api[_ ]?key|unauthor|permission denied|API_KEY_INVALID/i;
+  /api[_ ]?key.*(not valid|invalid)|invalid.*api[_ ]?key|unauthor|permission denied|API_KEY_INVALID|arrearage|overdue|欠费|account.*(suspend|not in good standing)|insufficient.*(balance|credit|fund)|余额不足/i;
 const COOLDOWN_RE =
   /quota|rate.?limit|exhaust|RESOURCE_EXHAUSTED|too many requests/i;
 

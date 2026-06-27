@@ -8,6 +8,9 @@ import openrouter from "./openrouter";
 import openai from "./openai";
 import deepseek from "./deepseek";
 import groq from "./groq";
+import moonshot from "./moonshot";
+import glm from "./glm";
+import qwen from "./qwen";
 
 /** Return the adapter that serves `provider`. Throws on an unknown provider. */
 export function getAdapter(provider: Provider): ProviderAdapter {
@@ -24,6 +27,12 @@ export function getAdapter(provider: Provider): ProviderAdapter {
       return deepseek;
     case "groq":
       return groq;
+    case "moonshot":
+      return moonshot;
+    case "glm":
+      return glm;
+    case "qwen":
+      return qwen;
     default: {
       // Exhaustiveness guard: if `Provider` grows, tsc flags this branch.
       const exhaustive: never = provider;

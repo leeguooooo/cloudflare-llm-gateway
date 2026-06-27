@@ -6,7 +6,10 @@ export type Provider =
   | "openrouter"
   | "openai"
   | "deepseek"
-  | "groq";
+  | "groq"
+  | "moonshot"
+  | "glm"
+  | "qwen";
 
 export const PROVIDERS: Provider[] = [
   "gemini",
@@ -15,6 +18,9 @@ export const PROVIDERS: Provider[] = [
   "openai",
   "deepseek",
   "groq",
+  "moonshot",
+  "glm",
+  "qwen",
 ];
 
 export interface Env {

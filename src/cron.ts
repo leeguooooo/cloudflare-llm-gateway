@@ -18,6 +18,9 @@ const PROBE_PATH: Record<Provider, string> = {
   openai: "/v1/models",
   deepseek: "/v1/models",
   groq: "/v1/models",
+  moonshot: "/v1/models",
+  glm: "/models",
+  qwen: "/v1/models",
 };
 
 function probeIntervalMs(env: Env): number {

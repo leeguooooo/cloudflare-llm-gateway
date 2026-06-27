@@ -332,6 +332,24 @@ async function probeKey(
       const r = await fetch("https://api.groq.com/openai/v1/models", { headers: { authorization: `Bearer ${key}` } });
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
+    if (provider === "moonshot") {
+      const r = await fetch("https://api.moonshot.cn/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "qwen") {
+      const r = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "glm") {
+      // GLM has no reliable models endpoint; probe with a 1-token chat.
+      const r = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "glm-4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
     // gemini
     const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
       headers: { "x-goog-api-key": key },

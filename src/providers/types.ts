@@ -50,6 +50,9 @@ const PROVIDER_PREFIXES: Provider[] = [
   "openai",
   "deepseek",
   "groq",
+  "moonshot",
+  "glm",
+  "qwen",
 ];
 
 /** Map an OpenAI `model` string to the provider that should serve it. */
@@ -67,6 +70,9 @@ export function routeModelToProvider(model: string): Provider {
     return "openai";
   }
   if (m.startsWith("deepseek-")) return "deepseek";
+  if (m.startsWith("moonshot") || m.startsWith("kimi")) return "moonshot";
+  if (m.startsWith("glm-")) return "glm";
+  if (m.startsWith("qwen") || m.startsWith("qwq") || m.startsWith("qvq")) return "qwen";
   if (
     m.startsWith("mistral") ||
     m.startsWith("open-mistral") ||
