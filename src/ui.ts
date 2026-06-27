@@ -107,6 +107,7 @@ const PAGE = String.raw`<!doctype html>
   td.n{font-variant-numeric:tabular-nums; font-weight:700}
   .dot{display:inline-block; width:13px;height:13px; border:2px solid var(--ink); border-radius:55% 45% 60% 40%; filter:url(#roughHi); vertical-align:-1px; margin-right:6px}
   .d-active{background:var(--green)} .d-cooldown{background:var(--yellow)} .d-disabled{background:var(--red)} .d-zero{background:#e8e6db}
+  .d-warn{background:var(--amber)}
   .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:14px}
   .stat{border:2px solid var(--ink); padding:14px 16px; border-radius:16px 12px 18px 13px/13px 18px 11px 16px}
   .stat.s-a{background:var(--mint)} .stat.s-c{background:var(--creamy)} .stat.s-d{background:var(--peach)}
@@ -672,24 +673,34 @@ const PAGE = String.raw`<!doctype html>
     ]
   };
   var previewUser=false;
+  var navIds=[];
   function buildNav(role){
     var items = NAV[role] || NAV.user;
+    navIds = items.map(function(it){ return it.id; });
     $('nav').innerHTML = items.map(function(it){
-      return '<a class="navitem c-'+it.color+'" data-sec="'+it.id+'"><span class="hd"></span>'+it.label+'</a>';
+      return '<a class="navitem c-'+it.color+'" data-sec="'+it.id+'" href="#'+it.id+'"><span class="hd"></span>'+it.label+'</a>';
     }).join('');
     Array.prototype.forEach.call($('nav').querySelectorAll('.navitem'), function(a){
-      a.onclick = function(){ selectSection(a.getAttribute('data-sec')); };
+      a.onclick = function(ev){ ev.preventDefault(); var id=a.getAttribute('data-sec'); if(location.hash!=='#'+id) location.hash=id; else selectSection(id); };
     });
-    selectSection(items[0].id);
+    // Honor the URL hash on (re)build; fall back to the first nav item.
+    var want = location.hash.replace(/^#/,'');
+    selectSection(navIds.indexOf(want)>=0 ? want : items[0].id);
   }
   function selectSection(id){
+    if(navIds.indexOf(id)<0) id = navIds[0];
     Array.prototype.forEach.call(document.querySelectorAll('.section'), function(s){ s.classList.remove('active'); });
     var sec=$('sec-'+id); if(sec) sec.classList.add('active');
     Array.prototype.forEach.call($('nav').querySelectorAll('.navitem'), function(a){
       a.classList.toggle('active', a.getAttribute('data-sec')===id);
     });
+    if(location.hash!=='#'+id) { try{ history.replaceState(null,'','#'+id); }catch(e){} }
     onSectionEnter(id);
   }
+  // Back/forward + manual hash edits switch sections.
+  window.addEventListener('hashchange', function(){
+    var id=location.hash.replace(/^#/,''); if(id && navIds.indexOf(id)>=0) selectSection(id);
+  });
   function onSectionEnter(id){
     if(id==='models' || id==='docs'){
       loadModels().then(function(){ renderModelsInto('models-body'); renderModelsInto('docs-models-body'); fillDocs(); });
@@ -1000,7 +1011,12 @@ const PAGE = String.raw`<!doctype html>
       if(!all.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有 key</td></tr>'; return; }
       if(!keys.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">全部已禁用 · 点「显示禁用」查看</td></tr>'; return; }
       tb.innerHTML = keys.map(function(k){
-        var sd = k.status==='active'?'d-active':k.status==='cooldown'?'d-cooldown':'d-disabled';
+        // active + a lingering last_error = valid key that's currently failing
+        // (e.g. throttled gemini) — show amber 'warn', not a misleading green.
+        var sd = k.status==='disabled' ? 'd-disabled'
+               : k.status==='cooldown' ? 'd-cooldown'
+               : k.last_error ? 'd-warn'
+               : 'd-active';
         var reason = (k.status==='disabled' && k.disabled_reason) ? k.disabled_reason : k.last_error;
         var err = reason ? esc(String(reason).slice(0,60)) : '';
         var toggle = (k.status==='active')

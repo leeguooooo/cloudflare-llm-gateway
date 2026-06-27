@@ -97,11 +97,23 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
       if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
-    // gemini
-    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models", { headers: { "x-goog-api-key": key } });
-    const rateLimited = r.status === 429;
-    const alive = r.ok || rateLimited; // 429 = valid key, just throttled
-    return { alive, status: r.status, rateLimited, balance: null, error: alive ? undefined : `http ${r.status}` };
+    // gemini — /v1beta/models is NOT rate-limited and lies about usability, so
+    // probe the actual generateContent path with a 1-token request.
+    const r = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+      {
+        method: "POST",
+        headers: { "x-goog-api-key": key, "content-type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "hi" }] }],
+          generationConfig: { maxOutputTokens: 1 },
+        }),
+      }
+    );
+    if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+    const rateLimited = r.status === 429; // valid key, just throttled (per-minute/day)
+    const alive = r.ok || rateLimited;
+    return { alive, status: r.status, rateLimited, balance: null, error: r.ok ? undefined : rateLimited ? "限流" : `http ${r.status}` };
   } catch (err) {
     return { alive: false, status: 0, rateLimited: false, balance: null, error: String(err instanceof Error ? err.message : err) };
   }
@@ -120,6 +132,16 @@ export async function runCheckAll(
         const r = await probeKey(k.provider, k.api_key);
         if (r.alive && !r.rateLimited && k.status !== "active") {
           await reactivateKey(env, k.id);
+        } else if (r.rateLimited && k.status === "active") {
+          // Valid key but can't serve right now — cool it down so it shows as
+          // 'cooldown' (not a misleading green 'active') and is skipped until it
+          // recovers; inline revive brings it back when cooldown_until passes.
+          await applyOutcome(
+            env,
+            k.id,
+            { kind: "cooldown", minutes: cooldownMinutes(env), reason: r.error || "rate limited" },
+            { cooldownMinutes: cooldownMinutes(env), maxConsecutive: MAX_CONSECUTIVE_FAILS }
+          );
         } else if (!r.alive && !r.rateLimited && k.status === "active") {
           await applyOutcome(
             env,
@@ -128,7 +150,7 @@ export async function runCheckAll(
             { cooldownMinutes: cooldownMinutes(env), maxConsecutive: MAX_CONSECUTIVE_FAILS }
           );
         }
-        return r.alive;
+        return r.alive && !r.rateLimited;
       } catch {
         return false;
       }
