@@ -316,6 +316,41 @@ const PAGE = String.raw`<!doctype html>
             <tbody id="docs-models-body"><tr><td colspan="2" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
+
+        <div class="card r1">
+          <h2 class="h-blue"><span class="hd"></span>POST /v1/chat/completions</h2>
+          <div class="hint" style="margin-top:0">Base URL(OpenAI <code>baseURL</code> 用这个):</div>
+          <div class="endpoint" id="docs-baseurl"></div>
+          <div class="hint">请求体(与 OpenAI 一致;支持 <code>stream:true</code> SSE 流式):</div>
+          <div class="out" id="docs-reqbody"></div>
+          <div class="hint">网关默认会在所选模型不可用时<b>自动回退</b>到同类可用模型。要关闭回退、强制只用所选模型,加 <code>"fallback": false</code>(此时模型不可用直接返回错误)。</div>
+        </div>
+
+        <div class="card r2">
+          <h2 class="h-green"><span class="hd"></span>响应头</h2>
+          <table>
+            <thead><tr><th>响应头</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td class="mono-token">X-KeyPool-Provider</td><td style="color:var(--muted)">实际命中的供应商(如 gemini)</td></tr>
+              <tr><td class="mono-token">X-KeyPool-Model</td><td style="color:var(--muted)">实际使用的模型 id(回退后可能与请求不同)</td></tr>
+              <tr><td class="mono-token">X-KeyPool-Fallback</td><td style="color:var(--muted)">出现即表示发生了回退,值为原始请求的模型</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card r1">
+          <h2 class="h-yellow"><span class="hd"></span>其它接口</h2>
+          <div class="hint" style="margin-top:0"><code>GET /v1/models</code> — 列出当前可路由的模型(仅含有可用 key、且未被标记不可用的模型):</div>
+          <div class="endpoint">GET <span id="docs-models-ep"></span></div>
+          <div class="hint">原生透传(直接用各家原生协议,网关只负责选 key 与计费):</div>
+          <div class="endpoint">/gemini/*&nbsp;&nbsp;·&nbsp;&nbsp;/mistral/*&nbsp;&nbsp;·&nbsp;&nbsp;/openrouter/*</div>
+          <div class="hint">把上游的原生路径接在前缀后即可,例如 <code>/gemini/v1beta/models/...:generateContent</code>。鉴权同样用 <code>Authorization: Bearer &lt;你的令牌&gt;</code>。</div>
+        </div>
+
+        <div class="card r2">
+          <h2 class="h-red"><span class="hd"></span>计费</h2>
+          <div class="hint" style="margin-top:0">按 token 计费:每次调用按输入 / 输出 token 数分别结算,价格见管理员配置的「模型价格」。余额不足时请求会被拒绝。用量与流水见「用量」与「余额」页。</div>
+        </div>
       </section>
 
       <!-- ----- admin: 总览 ----- -->
@@ -362,6 +397,15 @@ const PAGE = String.raw`<!doctype html>
             <thead><tr><th>供应商</th><th>可用</th><th>冷却</th><th>禁用</th></tr></thead>
             <tbody id="keys-byprovider"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
+        </div>
+        <div class="card r2">
+          <h2 class="h-red"><span class="hd"></span>模型可用性
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="modelstatus-probe">探测模型</button>
+            <button class="btn ghost small" id="modelstatus-refresh">刷新</button>
+          </h2>
+          <div id="modelstatus-body" class="hint" style="margin-top:0">加载中…</div>
+          <div class="hint">逐个模型试调一次,把不可用的(余额不足 / 模型下线)标灰;不可用的模型不会出现在 <code>/v1/models</code>。</div>
         </div>
       </section>
 
@@ -472,6 +516,13 @@ const PAGE = String.raw`<!doctype html>
           <div class="stat s-c"><div class="lbl">成功率</div><div class="num" id="u-rate">–</div></div>
           <div class="stat s-d"><div class="lbl">总 token</div><div class="num" id="u-tokens">–</div></div>
         </div>
+        <div class="card r2" style="margin-top:14px">
+          <h2 class="h-yellow"><span class="hd"></span>近 14 天请求
+            <span style="flex:1"></span>
+            <span class="hint" style="margin:0"><span class="dot d-active" style="margin-right:3px"></span>成功 <span class="dot d-disabled" style="margin:0 3px 0 10px"></span>失败</span>
+          </h2>
+          <div id="u-chart"></div>
+        </div>
         <div class="card r1" style="margin-top:14px">
           <h2 class="h-green"><span class="hd"></span>按供应商</h2>
           <table><thead><tr><th>供应商</th><th>请求</th><th>成功</th><th>平均延迟</th><th>token</th></tr></thead>
@@ -492,6 +543,13 @@ const PAGE = String.raw`<!doctype html>
           <div class="stat s-a"><div class="lbl">总请求</div><div class="num" id="l-total">–</div></div>
           <div class="stat s-c"><div class="lbl">成功率</div><div class="num" id="l-rate">–</div></div>
           <div class="stat s-d"><div class="lbl">总 token</div><div class="num" id="l-tokens">–</div></div>
+        </div>
+        <div class="card r2" style="margin-top:14px">
+          <h2 class="h-yellow"><span class="hd"></span>近 14 天请求
+            <span style="flex:1"></span>
+            <span class="hint" style="margin:0"><span class="dot d-active" style="margin-right:3px"></span>成功 <span class="dot d-disabled" style="margin:0 3px 0 10px"></span>失败</span>
+          </h2>
+          <div id="l-chart"></div>
         </div>
         <div class="card r1" style="margin-top:14px">
           <h2 class="h-green"><span class="hd"></span>按供应商
@@ -708,7 +766,7 @@ const PAGE = String.raw`<!doctype html>
     if(id==='dashboard') loadDashboard();
     if(id==='tokens') loadMyTokens();
     if(id==='overview') loadStats('ov');
-    if(id==='keys') loadStats('keys');
+    if(id==='keys'){ loadStats('keys'); loadModelStatus(); }
     if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
@@ -842,12 +900,40 @@ const PAGE = String.raw`<!doctype html>
     }).join('');
     $(tbodyId).innerHTML = html || '<tr><td colspan="6" style="color:var(--faint)">暂无</td></tr>';
   }
+  // Inline SVG daily bar chart: last 14 days (byDay is newest-first), drawn
+  // oldest->newest, ok in green stacked under failures in the red accent.
+  function renderDayChart(containerId, byDay){
+    var el=$(containerId); if(!el) return;
+    var days=(Array.isArray(byDay)?byDay:[]).slice(0,14).reverse(); // oldest -> newest
+    if(!days.length){ el.innerHTML='<div class="hint" style="margin:0">暂无每日数据</div>'; return; }
+    var slot=34, bw=22, H=128, base=H-22, top=18;
+    var W=days.length*slot+10;
+    var max=1; days.forEach(function(d){ var n=d.n||0; if(n>max) max=n; });
+    var bars=days.map(function(d,i){
+      var n=d.n||0, ok=d.ok||0, fail=n-ok; if(fail<0) fail=0;
+      var x=5+i*slot;
+      var hN=Math.round((n/max)*(base-top));
+      var hFail=Math.round((fail/max)*(base-top));
+      var hOk=hN-hFail; if(hOk<0) hOk=0;
+      var yTop=base-hN;
+      var label=String(d.day||'').slice(5); // MM-DD
+      var g='';
+      if(hFail>0) g+='<rect x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+hFail+'" fill="var(--red)" stroke="var(--ink)" stroke-width="1.5" rx="2"/>';
+      if(hOk>0) g+='<rect x="'+x+'" y="'+(yTop+hFail)+'" width="'+bw+'" height="'+hOk+'" fill="var(--green)" stroke="var(--ink)" stroke-width="1.5" rx="2"/>';
+      if(n>0) g+='<text x="'+(x+bw/2)+'" y="'+(yTop-3)+'" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="ui-monospace,monospace">'+esc(String(n))+'</text>';
+      g+='<text x="'+(x+bw/2)+'" y="'+(H-7)+'" text-anchor="middle" font-size="8.5" fill="var(--faint)" font-family="ui-monospace,monospace">'+esc(label)+'</text>';
+      return g;
+    }).join('');
+    el.innerHTML='<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMinYMid meet" style="max-width:100%;height:auto;display:block">'
+      +'<line x1="5" y1="'+base+'" x2="'+(W-5)+'" y2="'+base+'" stroke="var(--ink)" stroke-width="1.5"/>'
+      +bars+'</svg>';
+  }
   function loadUserUsage(){
-    api('/me/usage').then(function(r){ if(r.ok) renderUsage(r.body,'u'); });
+    api('/me/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); } });
     api('/me/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); });
   }
   function loadAdminUsage(){
-    api('/admin/usage').then(function(r){ if(r.ok) renderUsage(r.body,'l'); });
+    api('/admin/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'l'); renderDayChart('l-chart', r.body&&r.body.byDay); } });
     api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent'); });
   }
 
@@ -1022,8 +1108,13 @@ const PAGE = String.raw`<!doctype html>
         var toggle = (k.status==='active')
           ? '<button class="btn ghost small kl-disable">禁用</button>'
           : '<button class="btn ghost small kl-enable">启用</button>';
+        // gemini keys carry a Google project id (parsed on probe); show a short
+        // 'proj …<last4>' badge so the operator can spot keys sharing a project.
+        var proj = k.project_id
+          ? ' <span class="badge" style="background:var(--cream);border-color:#cfcbbd;color:var(--faint);font-size:9.5px;padding:0 6px" title="project '+esc(String(k.project_id))+'">proj …'+esc(String(k.project_id).slice(-4))+'</span>'
+          : '';
         return '<tr data-id="'+k.id+'">'
-          +'<td><span class="dot '+sd+'"></span>'+esc(k.provider)+'</td>'
+          +'<td><span class="dot '+sd+'"></span>'+esc(k.provider)+proj+'</td>'
           +'<td style="font-family:ui-monospace,monospace;font-size:12.5px">'+esc(k.masked)+'</td>'
           +'<td class="n">'+k.total_requests+' / '+k.total_fails+'</td>'
           +'<td style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis">'+err+'</td>'
@@ -1136,6 +1227,16 @@ const PAGE = String.raw`<!doctype html>
     $('docs-endpoint').textContent = 'POST ' + base + '/v1/chat/completions';
     $('docs-curl').innerHTML = curlSnippet(null);
     var model = (modelsCache && modelsCache[0] && modelsCache[0].id) || 'gemini-2.0-flash';
+    if($('docs-baseurl')) $('docs-baseurl').textContent = base + '/v1';
+    if($('docs-models-ep')) $('docs-models-ep').textContent = base + '/v1/models';
+    if($('docs-reqbody')) $('docs-reqbody').innerHTML = esc(
+      '{\n' +
+      '  "model": "' + model + '",\n' +
+      '  "messages": [{"role":"user","content":"hello"}],\n' +
+      '  "stream": false,\n' +
+      '  "fallback": true\n' +
+      '}'
+    );
     $('docs-sdk').innerHTML = esc(
       'from openai import OpenAI\n' +
       'client = OpenAI(\n' +
@@ -1191,6 +1292,29 @@ const PAGE = String.raw`<!doctype html>
       o.innerHTML='<span class="k">新增 '+b.added+'</span>  重复 '+b.duplicate+'  跳过 '+((b.skipped&&b.skipped.length)||0)+'\n'+esc(by);
       $('keys').value=''; loadStats('keys'); loadStats('ov');
     }).catch(function(){ btn.disabled=false; });
+  }
+
+  // ---------------- admin: model availability ----------------
+  function loadModelStatus(){
+    var el=$('modelstatus-body'); if(!el) return;
+    return api('/admin/models-status').then(function(r){
+      var list=Array.isArray(r.body)?r.body:[];
+      if(!list.length){ el.innerHTML='<span style="color:var(--faint)">尚未探测 · 点「探测模型」逐个试调</span>'; return; }
+      var bad=list.filter(function(m){ return !m.available; });
+      if(!bad.length){ el.innerHTML='<span style="color:var(--green)">全部模型可用</span> · 已探测 '+list.length+' 个'; return; }
+      el.innerHTML = '<div style="margin-bottom:6px;color:var(--muted)">不可用 '+bad.length+' / 已探测 '+list.length+'</div>'
+        + bad.map(function(m){
+          return '<div style="margin:3px 0"><span class="dot d-disabled"></span><b class="mono-token">'+esc(m.model)+'</b>'
+            +' <span style="color:var(--faint);font-size:12px">'+esc(m.provider||'')+'</span>'
+            +(m.reason?' · <span style="color:var(--red);font-size:12px">'+esc(String(m.reason).slice(0,80))+'</span>':'')+'</div>';
+        }).join('');
+    }).catch(function(){ el.innerHTML='<span class="e">出错</span>'; });
+  }
+  function probeModels(){
+    var btn=$('modelstatus-probe'); var el=$('modelstatus-body');
+    if(btn) btn.disabled=true; if(el) el.innerHTML='探测中…(逐个模型试调一次,稍候十几秒)';
+    api('/admin/probe-models',{method:'POST'}).then(function(){ if(btn) btn.disabled=false; loadModelStatus(); })
+    .catch(function(){ if(btn) btn.disabled=false; loadModelStatus(); });
   }
 
   // ---------------- admin: users ----------------
@@ -1260,6 +1384,8 @@ const PAGE = String.raw`<!doctype html>
   $('ov-refresh').onclick = function(){ loadStats('ov'); };
   $('ov-probe').onclick = probe;
   $('keys-refresh').onclick = function(){ loadStats('keys'); };
+  $('modelstatus-refresh').onclick = loadModelStatus;
+  $('modelstatus-probe').onclick = probeModels;
   $('importBtn').onclick = importKeys;
   $('users-refresh').onclick = loadUsers;
   $('adm-mint').onclick = mintAdmin;

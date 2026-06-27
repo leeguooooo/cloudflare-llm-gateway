@@ -73,6 +73,8 @@ export interface ApiKeyRow {
   cooldown_until: number | null;
   disabled_reason: string | null;
   created_at: number;
+  /** Provider account/project identifier (e.g. gemini Google project number). */
+  project_id: string | null;
 }
 
 /** Result of evaluating a single upstream call against one key. */

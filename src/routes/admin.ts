@@ -24,10 +24,11 @@ import {
   listTransactions,
   billingEnabled,
   billingDiscount,
+  listModelStatus,
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
-import { probeKey, runCheckAll } from "../probe";
+import { probeKey, runCheckAll, probeModels } from "../probe";
 import { getAdapter } from "../providers";
 import type { OpenAIChatRequest } from "../providers/types";
 
@@ -286,8 +287,20 @@ app.get("/keys/list", async (c) => {
       last_used_at: k.last_used_at,
       cooldown_until: k.cooldown_until,
       created_at: k.created_at,
+      project_id: k.project_id,
     })),
   });
+});
+
+// GET /models-status — per-model availability (probed by /probe-models).
+app.get("/models-status", async (c) => {
+  return c.json(await listModelStatus(c.env));
+});
+
+// POST /probe-models — probe one active key per provider against each model
+// and record availability. Returns { checked, blocked }.
+app.post("/probe-models", async (c) => {
+  return c.json(await probeModels(c.env));
 });
 
 // POST /check-all-keys — probe every key in one go (capped for the subrequest

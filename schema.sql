@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_api_keys (
   cooldown_until    INTEGER,                           -- epoch ms
   disabled_reason   TEXT,
   created_at        INTEGER NOT NULL,                  -- epoch ms
+  project_id        TEXT,                              -- e.g. gemini Google project number
   UNIQUE(provider, api_key)
 );
 
@@ -92,4 +93,12 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_prices (
 CREATE TABLE IF NOT EXISTS keypool_gateway_payment_events (
   event_id   TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS keypool_gateway_model_status (
+  model        TEXT PRIMARY KEY,
+  provider     TEXT NOT NULL,
+  available    INTEGER NOT NULL DEFAULT 1,
+  last_checked INTEGER,
+  reason       TEXT
 );

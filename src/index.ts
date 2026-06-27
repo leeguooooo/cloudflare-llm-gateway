@@ -10,7 +10,7 @@
 import { Hono } from "hono";
 import type { Env } from "./types";
 import { statsSummary } from "./db";
-import { runCheckAll } from "./probe";
+import { runCheckAll, probeModels } from "./probe";
 import { adminPage } from "./ui";
 import auth from "./oidc";
 import admin from "./routes/admin";
@@ -42,8 +42,9 @@ const scheduled = (
   env: Env,
   ctx: ExecutionContext
 ): void => {
-  // Automatic health-check on the cron tick: revive recovered keys, disable dead.
-  ctx.waitUntil(runCheckAll(env));
+  // Automatic health-check on the cron tick: revive recovered keys, disable
+  // dead, then refresh per-model availability.
+  ctx.waitUntil(runCheckAll(env).then(() => probeModels(env)));
 };
 
 export default {

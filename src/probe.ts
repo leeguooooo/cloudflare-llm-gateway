@@ -7,8 +7,16 @@
  */
 
 import type { Env, Provider } from "./types";
-import { listAllKeys, reactivateKey, applyOutcome } from "./db";
+import { PROVIDERS } from "./types";
+import { listAllKeys, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
+import { getAdapter } from "./providers";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "./keypool";
+
+/** Truncate an upstream error body for a compact status reason. */
+function snippet(body: string, max = 200): string {
+  const s = (body || "").replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
 
 export interface KeyBalance {
   remaining: number | null;
@@ -23,6 +31,8 @@ export interface ProbeResult {
   rateLimited: boolean;
   balance: KeyBalance | null;
   error?: string;
+  /** Google project number parsed from a gemini error body, when present. */
+  projectId?: string;
 }
 
 /** Live-probe one key. OpenRouter/DeepSeek also return real balance. */
@@ -110,10 +120,17 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
         }),
       }
     );
-    if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
     const rateLimited = r.status === 429; // valid key, just throttled (per-minute/day)
     const alive = r.ok || rateLimited;
-    return { alive, status: r.status, rateLimited, balance: null, error: r.ok ? undefined : rateLimited ? "限流" : `http ${r.status}` };
+    let projectId: string | undefined;
+    if (!r.ok) {
+      // Read the body once: parse the Google project number out of the error.
+      const body = await r.text().catch(() => "");
+      const m = /project_number:(\d+)/.exec(body);
+      if (m) projectId = m[1];
+    }
+    if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key", projectId };
+    return { alive, status: r.status, rateLimited, balance: null, error: r.ok ? undefined : rateLimited ? "限流" : `http ${r.status}`, projectId };
   } catch (err) {
     return { alive: false, status: 0, rateLimited: false, balance: null, error: String(err instanceof Error ? err.message : err) };
   }
@@ -130,6 +147,7 @@ export async function runCheckAll(
     subset.map(async (k) => {
       try {
         const r = await probeKey(k.provider, k.api_key);
+        if (r.projectId) await setKeyProjectId(env, k.id, r.projectId);
         if (r.alive && !r.rateLimited && k.status !== "active") {
           await reactivateKey(env, k.id);
         } else if (r.rateLimited && k.status === "active") {
@@ -158,4 +176,46 @@ export async function runCheckAll(
   );
   const alive = results.filter(Boolean).length;
   return { checked: results.length, alive, dead: results.length - alive, capped: all.length > subset.length };
+}
+
+/**
+ * Probe model-level availability: for each provider with an active key, send a
+ * 1-token chat to each model. 2xx or 429 means the model itself works (just
+ * throttled); any other non-2xx marks the model unavailable with a reason
+ * snippet (e.g. glm '余额不足/无资源包', or a 404/400 model-not-found). Capped at
+ * ~40 upstream calls and each call is isolated in try/catch so one failure
+ * never aborts the sweep. Cheap enough to run from the health check.
+ */
+export async function probeModels(env: Env): Promise<{ checked: number; blocked: number }> {
+  const MAX_CALLS = 40;
+  let checked = 0;
+  let blocked = 0;
+  for (const provider of PROVIDERS) {
+    if (checked >= MAX_CALLS) break;
+    const key = await oneActiveKey(env, provider);
+    if (!key) continue;
+    const adapter = getAdapter(provider);
+    const models = adapter.models().slice(0, Math.max(0, MAX_CALLS - checked));
+    for (const model of models) {
+      if (checked >= MAX_CALLS) break;
+      checked++;
+      try {
+        const r = await adapter.chatCompletions(
+          { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
+          key
+        );
+        if (r.ok || r.status === 429) {
+          await setModelStatus(env, model, provider, true, null);
+        } else {
+          const body = await r.text().catch(() => "");
+          await setModelStatus(env, model, provider, false, snippet(body) || `http ${r.status}`);
+          blocked++;
+        }
+      } catch (err) {
+        await setModelStatus(env, model, provider, false, snippet(String(err instanceof Error ? err.message : err)));
+        blocked++;
+      }
+    }
+  }
+  return { checked, blocked };
 }
