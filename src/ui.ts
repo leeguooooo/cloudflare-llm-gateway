@@ -87,7 +87,7 @@ const PAGE = String.raw`<!doctype html>
   .card h2 .hd{width:14px;height:14px;border:2px solid var(--ink);border-radius:55% 45% 60% 40%;filter:url(#roughHi);flex:none}
   .h-red .hd{background:var(--red)} .h-blue .hd{background:var(--blue)} .h-green .hd{background:var(--green)} .h-yellow .hd{background:var(--yellow)}
   label{display:block; font-family:var(--marker); font-size:13px; color:var(--muted); margin-bottom:7px}
-  input,textarea{width:100%; background:var(--cream); color:var(--ink); border:2px solid var(--ink);
+  input,textarea,select{width:100%; background:var(--cream); color:var(--ink); border:2px solid var(--ink);
     border-radius:10px 13px 9px 12px/12px 9px 13px 10px; padding:10px 13px; font-family:var(--sans); font-size:14px; outline:none}
   input:focus,textarea:focus{background:#fff; border-color:var(--red)}
   textarea{resize:vertical; min-height:120px; line-height:1.5}
@@ -426,6 +426,41 @@ const PAGE = String.raw`<!doctype html>
         </div>
       </section>
 
+      <!-- ----- consumer: 聊天 ----- -->
+      <section class="section" id="sec-chat">
+        <h2 class="sec-h">聊天</h2>
+        <p class="sec-sub">// 选个模型直接聊 · 按 token 计费</p>
+        <div class="card r1">
+          <div class="row" style="margin-bottom:10px">
+            <div><label>模型</label><select id="chat-model"></select></div>
+            <button class="btn ghost small" id="chat-clear">清空</button>
+          </div>
+          <div id="chat-log" style="min-height:180px; max-height:420px; overflow:auto; border:2px dashed #cfcbbd; border-radius:12px; padding:12px; background:var(--cream)"><span style="color:var(--faint)">开始对话…</span></div>
+          <div class="row" style="margin-top:12px; align-items:stretch">
+            <div><textarea id="chat-input" style="min-height:56px" placeholder="说点什么…(Enter 发送,Shift+Enter 换行)"></textarea></div>
+            <button class="btn primary" id="chat-send">发送</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ----- admin: 调试聊天 ----- -->
+      <section class="section" id="sec-debugchat">
+        <h2 class="sec-h">调试聊天</h2>
+        <p class="sec-sub">// 用某个 key 直连试聊 · 不走池子 · 不计费</p>
+        <div class="card r1">
+          <div class="row" style="margin-bottom:10px">
+            <div style="flex:2"><label>选 key</label><select id="dbg-key"></select></div>
+            <div><label>模型(留空=默认)</label><input id="dbg-model" placeholder="默认" autocomplete="off" /></div>
+            <button class="btn ghost small" id="dbg-clear">清空</button>
+          </div>
+          <div id="dbg-log" style="min-height:180px; max-height:420px; overflow:auto; border:2px dashed #cfcbbd; border-radius:12px; padding:12px; background:var(--cream)"><span style="color:var(--faint)">选一个 key,直连试聊…</span></div>
+          <div class="row" style="margin-top:12px; align-items:stretch">
+            <div><textarea id="dbg-input" style="min-height:56px" placeholder="测试这个 key…"></textarea></div>
+            <button class="btn primary" id="dbg-send">发送</button>
+          </div>
+        </div>
+      </section>
+
       <!-- ----- consumer: 用量 ----- -->
       <section class="section" id="sec-usage">
         <h2 class="sec-h">用量</h2>
@@ -616,6 +651,7 @@ const PAGE = String.raw`<!doctype html>
   var NAV = {
     user: [
       {id:'dashboard', label:'控制台', color:'red'},
+      {id:'chat',      label:'聊天', color:'blue'},
       {id:'tokens',    label:'我的令牌', color:'blue'},
       {id:'models',    label:'模型', color:'green'},
       {id:'usage',     label:'用量', color:'amber'},
@@ -624,6 +660,7 @@ const PAGE = String.raw`<!doctype html>
     ],
     admin: [
       {id:'overview',    label:'总览', color:'green'},
+      {id:'debugchat',   label:'调试聊天', color:'blue'},
       {id:'keys',        label:'Key 池', color:'yellow'},
       {id:'keylist',     label:'Key 列表', color:'red'},
       {id:'users',       label:'用户', color:'blue'},
@@ -666,6 +703,73 @@ const PAGE = String.raw`<!doctype html>
     if(id==='logs'){ var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage; loadAdminUsage(); }
     if(id==='billing') loadBilling();
     if(id==='balance') loadBalance();
+    if(id==='chat') initChat();
+    if(id==='debugchat') initDbgChat();
+  }
+
+  // ---------------- chat playgrounds ----------------
+  function renderChat(logId, msgs){
+    var el=$(logId); if(!el) return;
+    el.innerHTML = msgs.map(function(m){
+      var who = m.role==='user'?'你':(m.role==='assistant'?'AI':m.role);
+      var col = m.role==='user'?'var(--blue)':'var(--green)';
+      return '<div style="margin-bottom:11px"><b style="font-family:var(--marker);color:'+col+'">'+who+'</b>'
+        +'<div style="white-space:pre-wrap;word-break:break-word">'+esc(String(m.content==null?'':m.content))+'</div></div>';
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+  function chatReply(r){
+    if(r.ok && r.body && r.body.choices && r.body.choices[0] && r.body.choices[0].message)
+      return r.body.choices[0].message.content;
+    var e = r.body && (r.body.error && r.body.error.message || r.body.error) || JSON.stringify(r.body);
+    return '⚠ [错误 '+r.status+'] '+e;
+  }
+  function bindEnter(inputId, sendFn){
+    var el=$(inputId); if(!el||el.__b) return; el.__b=1;
+    el.addEventListener('keydown', function(ev){ if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); sendFn(); } });
+  }
+  // consumer chat (billed)
+  var chatMsgs=[];
+  function initChat(){
+    loadModels().then(function(){
+      var sel=$('chat-model'); if(sel && !sel.options.length) sel.innerHTML=(modelsCache||[]).map(function(m){return '<option>'+esc(m.id)+'</option>';}).join('');
+    });
+    var b=$('chat-send'); if(b) b.onclick=sendChat;
+    var cl=$('chat-clear'); if(cl) cl.onclick=function(){ chatMsgs=[]; renderChat('chat-log',chatMsgs); };
+    bindEnter('chat-input', sendChat);
+  }
+  function sendChat(){
+    var inp=$('chat-input'), txt=inp.value.trim(); if(!txt) return;
+    var model=$('chat-model').value;
+    chatMsgs.push({role:'user',content:txt}); inp.value='';
+    renderChat('chat-log', chatMsgs.concat([{role:'assistant',content:'…'}]));
+    var btn=$('chat-send'); btn.disabled=true;
+    api('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:model,messages:chatMsgs})})
+    .then(function(r){ btn.disabled=false; chatMsgs.push({role:'assistant',content:chatReply(r)}); renderChat('chat-log',chatMsgs); })
+    .catch(function(){ btn.disabled=false; chatMsgs.push({role:'assistant',content:'⚠ 网络错误'}); renderChat('chat-log',chatMsgs); });
+  }
+  // admin debug chat (specific key, no billing)
+  var dbgMsgs=[];
+  function initDbgChat(){
+    api('/admin/keys/list').then(function(r){
+      var keys=(r.body&&r.body.keys)||[]; var sel=$('dbg-key'); if(!sel) return;
+      sel.innerHTML = keys.map(function(k){ return '<option value="'+k.id+'">#'+k.id+' · '+k.provider+' · '+esc(k.masked)+' ('+k.status+')</option>'; }).join('');
+    });
+    var b=$('dbg-send'); if(b) b.onclick=sendDbg;
+    var cl=$('dbg-clear'); if(cl) cl.onclick=function(){ dbgMsgs=[]; renderChat('dbg-log',dbgMsgs); };
+    bindEnter('dbg-input', sendDbg);
+  }
+  function sendDbg(){
+    var inp=$('dbg-input'), txt=inp.value.trim(); if(!txt) return;
+    var id=$('dbg-key').value; if(!id){ alert('先选一个 key'); return; }
+    var model=$('dbg-model').value.trim();
+    dbgMsgs.push({role:'user',content:txt}); inp.value='';
+    renderChat('dbg-log', dbgMsgs.concat([{role:'assistant',content:'…'}]));
+    var btn=$('dbg-send'); btn.disabled=true;
+    var payload={messages:dbgMsgs}; if(model) payload.model=model;
+    api('/admin/keys/'+id+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){ btn.disabled=false; dbgMsgs.push({role:'assistant',content:chatReply(r)}); renderChat('dbg-log',dbgMsgs); })
+    .catch(function(){ btn.disabled=false; dbgMsgs.push({role:'assistant',content:'⚠ 网络错误'}); renderChat('dbg-log',dbgMsgs); });
   }
 
   // ---------------- usage / logs (shared renderers) ----------------

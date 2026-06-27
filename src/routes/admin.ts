@@ -27,6 +27,8 @@ import {
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
+import { getAdapter } from "../providers";
+import type { OpenAIChatRequest } from "../providers/types";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -315,6 +317,32 @@ app.post("/check-all-keys", async (c) => {
   );
   const alive = results.filter(Boolean).length;
   return c.json({ checked: results.length, alive, dead: results.length - alive, capped: all.length > subset.length });
+});
+
+// POST /keys/:id/chat — chat directly through ONE specific key (bypasses the
+// pool; no billing, no key-health side effects). For admins to test a key.
+app.post("/keys/:id/chat", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) {
+    return c.json({ error: { message: "invalid key id", type: "invalid_request_error" } }, 400);
+  }
+  const row = await getKeyById(c.env, id);
+  if (!row) return c.json({ error: { message: "key not found", type: "not_found" } }, 404);
+  const body = (await c.req.json().catch(() => null)) as
+    | { messages?: unknown; model?: unknown; max_tokens?: unknown }
+    | null;
+  if (!body || !Array.isArray(body.messages)) {
+    return c.json({ error: { message: "messages required", type: "invalid_request_error" } }, 400);
+  }
+  const adapter = getAdapter(row.provider);
+  const model = typeof body.model === "string" && body.model ? body.model : adapter.models()[0];
+  const max_tokens = typeof body.max_tokens === "number" ? body.max_tokens : 256;
+  const req: OpenAIChatRequest = {
+    model,
+    messages: body.messages as OpenAIChatRequest["messages"],
+    max_tokens,
+  };
+  return adapter.chatCompletions(req, row.api_key);
 });
 
 // DELETE /keys/:id — permanently remove a key.

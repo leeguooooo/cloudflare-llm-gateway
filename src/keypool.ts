@@ -14,6 +14,8 @@ import {
 export const DEFAULT_COOLDOWN_MINUTES = 15;
 export const DEFAULT_MAX_RETRIES = 4;
 export const MAX_CONSECUTIVE_FAILS = 3;
+/** Per-day quota errors won't recover for hours — cool them down this long. */
+export const DAILY_COOLDOWN_MINUTES = 360;
 
 const DISABLE_RE =
   /api[_ ]?key.*(not valid|invalid)|invalid.*api[_ ]?key|unauthor|permission denied|API_KEY_INVALID|arrearage|overdue|欠费|account.*(suspend|not in good standing)|insufficient.*(balance|credit|fund)|余额不足/i;
@@ -47,9 +49,12 @@ export function classifyError(status: number, bodyText: string): Outcome {
   }
 
   if (status === 429 || (status === 400 && COOLDOWN_RE.test(body))) {
+    // A per-DAY quota won't recover for hours; cool it down long so it doesn't
+    // flap green->429->green. A per-minute limit uses the short default (minutes:0).
+    const daily = /per[\s-]?day|requests per day|daily limit|RPD|per-day/i.test(body);
     return {
       kind: "cooldown",
-      minutes: 0, // filled in by caller using cooldownMinutes(env)
+      minutes: daily ? DAILY_COOLDOWN_MINUTES : 0, // 0 = filled by caller (short)
       reason: `http ${status}: ${snippet(body)}`,
     };
   }
@@ -310,7 +315,7 @@ export async function callWithPool(
     }
 
     let outcome = classifyError(status, bodyText);
-    if (outcome.kind === "cooldown") {
+    if (outcome.kind === "cooldown" && outcome.minutes <= 0) {
       outcome = { ...outcome, minutes: coolMins };
     }
 

@@ -16,10 +16,17 @@ export async function resolveCaller(
   const token = extractToken(req);
   if (token) {
     const full = await resolveTokenFull(env, token);
-    if (full) return { tokenId: full.id, ownerSub: full.ownerSub };
+    if (full) {
+      // Admins are operators, not consumers: never metered or billed.
+      if (full.role === "admin") return { tokenId: null, ownerSub: null };
+      return { tokenId: full.id, ownerSub: full.ownerSub };
+    }
   }
   const sess = await getSession(env, req);
-  if (sess) return { tokenId: null, ownerSub: sess.sub };
+  if (sess) {
+    if (sess.role === "admin") return { tokenId: null, ownerSub: null };
+    return { tokenId: null, ownerSub: sess.sub };
+  }
   return { tokenId: null, ownerSub: null };
 }
 
