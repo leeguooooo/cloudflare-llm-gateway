@@ -703,7 +703,8 @@ const PAGE = String.raw`<!doctype html>
     var list=modelsCache||[];
     if(!list.length){ tb.innerHTML='<tr><td colspan="2" style="color:var(--faint)">暂无</td></tr>'; return; }
     tb.innerHTML = list.map(function(m){
-      return '<tr><td style="font-weight:700" class="mono-token">'+esc(m.id)+'</td><td style="color:var(--muted)">'+esc(m.owned_by||m.ownedBy||'–')+'</td></tr>';
+      var d=MODEL_LABELS[m.id];
+      return '<tr><td style="font-weight:700" class="mono-token">'+esc(m.id)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td><td style="color:var(--muted)">'+esc(m.owned_by||m.ownedBy||'–')+'</td></tr>';
     }).join('');
   }
 
@@ -833,6 +834,18 @@ const PAGE = String.raw`<!doctype html>
   }
   // consumer chat (billed)
   var chatMsgs=[];
+  // Friendly Chinese descriptions so tier-alias model ids (qwen-max etc.) are legible.
+  var MODEL_LABELS={
+    'mistral-large-latest':'Mistral 旗舰','mistral-small-latest':'Mistral 轻量','open-mistral-nemo':'Mistral Nemo 开源','codestral-latest':'Mistral 代码',
+    'moonshot-v1-8k':'Kimi 8K 上下文','moonshot-v1-32k':'Kimi 32K 上下文','moonshot-v1-128k':'Kimi 128K 长文','kimi-k2-0711-preview':'Kimi K2 预览',
+    'glm-4-flash':'智谱 GLM-4 Flash(免费)','glm-4-plus':'智谱 GLM-4 Plus','glm-4-air':'智谱 GLM-4 Air','glm-4':'智谱 GLM-4',
+    'qwen-max':'通义千问 Max(最强)','qwen-plus':'通义千问 Plus(均衡)','qwen-turbo':'通义千问 Turbo(快/省)','qwen2.5-72b-instruct':'通义千问 2.5 72B',
+    'gemini-2.0-flash':'Gemini 2.0 Flash','gemini-2.0-flash-lite':'Gemini 2.0 Flash Lite','gemini-1.5-flash':'Gemini 1.5 Flash','gemini-1.5-pro':'Gemini 1.5 Pro',
+    'gpt-4o':'OpenAI GPT-4o','gpt-4o-mini':'OpenAI GPT-4o mini','o3-mini':'OpenAI o3-mini',
+    'deepseek-chat':'DeepSeek V3 对话','deepseek-reasoner':'DeepSeek R1 推理',
+    'llama-3.3-70b-versatile':'Llama 3.3 70B (Groq)','llama-3.1-8b-instant':'Llama 3.1 8B (Groq)'
+  };
+  function modelLabel(id){ var d=MODEL_LABELS[id]; return d ? id+' — '+d : id; }
   function initChat(){
     loadModels().then(function(){
       var sel=$('chat-model');
@@ -840,7 +853,7 @@ const PAGE = String.raw`<!doctype html>
         var groups={};
         (modelsCache||[]).forEach(function(m){ (groups[m.owned_by]=groups[m.owned_by]||[]).push(m.id); });
         sel.innerHTML = Object.keys(groups).map(function(p){
-          return '<optgroup label="'+esc(p)+'">'+groups[p].map(function(id){return '<option>'+esc(id)+'</option>';}).join('')+'</optgroup>';
+          return '<optgroup label="'+esc(p)+'">'+groups[p].map(function(id){return '<option value="'+esc(id)+'">'+esc(modelLabel(id))+'</option>';}).join('')+'</optgroup>';
         }).join('');
       }
     });
