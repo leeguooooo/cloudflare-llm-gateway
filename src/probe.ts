@@ -148,7 +148,9 @@ export async function runCheckAll(
       try {
         const r = await probeKey(k.provider, k.api_key);
         if (r.projectId) await setKeyProjectId(env, k.id, r.projectId);
-        if (r.alive && !r.rateLimited && k.status !== "active") {
+        if (r.alive && !r.rateLimited) {
+          // Healthy: ensure active AND clear any stale last_error (e.g. a glm key
+          // that errored on a paid model but works for the free one).
           await reactivateKey(env, k.id);
         } else if (r.rateLimited && k.status === "active") {
           // Valid key but can't serve right now — cool it down so it shows as

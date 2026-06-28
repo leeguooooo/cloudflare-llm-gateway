@@ -358,8 +358,9 @@ app.post("/keys/:id/check", async (c) => {
   if (!row) return c.json({ error: { message: "key not found", type: "not_found" } }, 404);
 
   const result = await probeKey(row.provider, row.api_key);
-  // A successful check brings a disabled/cooled key back into rotation.
-  if (result.alive && !result.rateLimited && row.status !== "active") {
+  // A successful check brings a disabled/cooled key back into rotation AND clears
+  // any stale last_error (so a "可用" key no longer shows an old error).
+  if (result.alive && !result.rateLimited) {
     await reactivateKey(c.env, id);
   }
   return c.json({ id, provider: row.provider, ...result });
