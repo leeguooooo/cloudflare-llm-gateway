@@ -237,12 +237,16 @@ app.get("/callback", async (c) => {
     headers: { authorization: `Bearer ${tok.access_token}` },
   });
   if (!uiRes.ok) return c.text(`userinfo failed: ${uiRes.status}`, 502);
-  const info = (await uiRes.json()) as { sub?: string; email?: string; name?: string };
+  const info = (await uiRes.json()) as { sub?: string; email?: string; name?: string; email_verified?: boolean };
   const email = (info.email || "").toLowerCase();
   if (!email) return c.text("no email in profile", 403);
 
+  // Admin is granted ONLY to the configured email, and never when the IdP
+  // explicitly marks the email unverified (email_verified === false) — that
+  // blocks a spoofed/unverified profile email on a permissive IdP. A first-party
+  // IdP that omits the field is still trusted (avoids locking out the sole admin).
   const admin = (c.env.ADMIN_EMAIL || "").toLowerCase();
-  const isAdmin = email === admin;
+  const isAdmin = email === admin && info.email_verified !== false;
   const sub = info.sub || email;
   const name = info.name || null;
   const row = await upsertUser(c.env, { sub, email, name, isAdmin });

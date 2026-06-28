@@ -35,7 +35,12 @@ function computeSubPath(c: Context<AppEnv>, provider: Provider): string {
   if (path.length === 0 || !path.startsWith("/")) {
     path = `/${path}`;
   }
-  return `${path}${url.search}`;
+  // Drop the gateway auth params so our access token / ADMIN_TOKEN never leaks
+  // to the upstream provider (the adapter injects the real upstream key itself).
+  url.searchParams.delete("key");
+  url.searchParams.delete("token");
+  const q = url.searchParams.toString();
+  return `${path}${q ? "?" + q : ""}`;
 }
 
 function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
@@ -53,11 +58,14 @@ function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
       const bal = await getBalanceMicro(c.env, caller.ownerSub);
       if (bal <= 0) return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
     }
+    // Price native passthrough at the provider's default model (the raw body
+    // isn't parsed here) instead of the global default fallback price.
+    const billModel = getAdapter(provider).models()[0] ?? null;
     const res = await callWithPool(
       c.env,
       provider,
       (key: string) => getAdapter(provider).passthrough(subPath, req, key),
-      { tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx }
+      { model: billModel, tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx }
     );
     if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
       await incrementTokenUse(c.env, caller.tokenId);

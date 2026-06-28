@@ -9,7 +9,6 @@
 
 import { Hono } from "hono";
 import type { Env } from "./types";
-import { statsSummary } from "./db";
 import { runCheckAll, probeModels } from "./probe";
 import { adminPage } from "./ui";
 import auth from "./oidc";
@@ -25,10 +24,8 @@ const app = new Hono<{ Bindings: Env }>();
 // by the API routes it calls (SSO session or bearer token).
 app.get("/", (c) => c.html(adminPage(c.env)));
 
-app.get("/healthz", async (c) => {
-  const stats = await statsSummary(c.env);
-  return c.json({ ok: true, ...stats });
-});
+// Public liveness probe — intentionally minimal (no pool inventory leak).
+app.get("/healthz", (c) => c.json({ ok: true }));
 
 app.route("/stripe", stripe);
 app.route("/auth", auth);

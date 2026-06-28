@@ -50,6 +50,12 @@ app.post("/chat/completions", async (c) => {
       400,
     );
   }
+  if (!Array.isArray(body.messages)) {
+    return c.json(
+      { error: { message: "messages must be an array", type: "invalid_request_error" } },
+      400,
+    );
+  }
 
   const provider = routeModelToProvider(body.model);
   const caller = await resolveCaller(c.env, c.req.raw);

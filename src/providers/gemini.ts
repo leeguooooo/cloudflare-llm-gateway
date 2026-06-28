@@ -328,6 +328,7 @@ const gemini: ProviderAdapter = {
 
     const headers = new Headers(req.headers);
     headers.delete("authorization");
+    headers.delete("cookie");
     headers.delete("host");
     headers.set("x-goog-api-key", key);
 

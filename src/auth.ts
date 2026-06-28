@@ -2,8 +2,8 @@
 
 import type { MiddlewareHandler } from "hono";
 import type { Env, Role } from "./types";
-import { resolveToken, resolveTokenFull } from "./db";
-import { sessionRole, getSession } from "./oidc";
+import { resolveToken, resolveTokenFull, getUserBySub } from "./db";
+import { getSession } from "./oidc";
 
 /**
  * Identify the caller of a request for usage attribution: a bearer token maps to
@@ -28,6 +28,14 @@ export async function resolveCaller(
     return { tokenId: null, ownerSub: sess.sub };
   }
   return { tokenId: null, ownerSub: null };
+}
+
+/** OpenAI-shaped 403 for a logged-in-but-not-approved consumer. */
+function forbidden(message: string): Response {
+  return new Response(
+    JSON.stringify({ error: { message, type: "account_not_approved" } }),
+    { status: 403, headers: { "content-type": "application/json" } }
+  );
 }
 
 /** Hono generics shared by auth-protected routes (exposes `role` via c.get). */
@@ -82,11 +90,31 @@ function unauthorized(): Response {
  */
 function makeAuth(adminOnly: boolean): MiddlewareHandler<AuthEnv> {
   return async (c, next) => {
-    // Bearer token (API clients) first, then the SSO session cookie (browser).
+    // Bearer token (API clients) first — these are enabled-checked in the DB and
+    // are disabled when a user is blocked, so no extra status check is needed.
     let role: Role | null = null;
     const token = extractToken(c.req.raw);
     if (token) role = await resolveToken(c.env, token);
-    if (!role) role = await sessionRole(c.env, c.req.raw);
+
+    // Else fall back to the SSO session cookie (browser). A non-admin session
+    // must belong to an APPROVED user — this enforces the admin-approval gate
+    // and instantly cuts off a blocked user (the JWT alone is not enough).
+    if (!role) {
+      const sess = await getSession(c.env, c.req.raw);
+      if (sess) {
+        if (sess.role === "admin") {
+          role = "admin";
+        } else {
+          const u = await getUserBySub(c.env, sess.sub);
+          if (!u || u.status !== "approved") {
+            return forbidden(
+              u && u.status === "blocked" ? "账号已停用" : "账号待开通,请联系管理员"
+            );
+          }
+          role = "user";
+        }
+      }
+    }
 
     if (!role) return unauthorized();
     if (adminOnly && role !== "admin") return unauthorized();

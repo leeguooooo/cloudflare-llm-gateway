@@ -45,6 +45,8 @@ const openrouter: ProviderAdapter = {
     // Strip hop-by-host headers so the upstream origin resolves correctly.
     headers.delete("host");
     headers.delete("content-length");
+    headers.delete("cookie");
+    headers.delete("x-goog-api-key");
 
     const method = req.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";

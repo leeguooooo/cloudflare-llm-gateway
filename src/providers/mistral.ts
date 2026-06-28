@@ -41,6 +41,8 @@ const mistralAdapter: ProviderAdapter = {
     headers.set("Authorization", `Bearer ${key}`);
     headers.delete("host");
     headers.delete("content-length");
+    headers.delete("cookie");
+    headers.delete("x-goog-api-key");
 
     const method = req.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";

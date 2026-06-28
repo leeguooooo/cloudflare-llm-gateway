@@ -71,10 +71,16 @@ interface StripeEvent {
   type?: string;
   data?: {
     object?: {
+      payment_status?: string;
+      amount_total?: number; // settled amount, in the currency's minor unit (cents)
+      currency?: string;
       metadata?: { sub?: string; amount_micro?: string } | null;
     } | null;
   } | null;
 }
+
+/** Reject events whose signature timestamp is too old/new (replay defense). */
+const SIG_TOLERANCE_SEC = 300;
 
 // ---------- route ----------
 
@@ -96,6 +102,12 @@ app.post("/webhook", async (c) => {
     return c.text("invalid signature", 400);
   }
 
+  // Replay defense: the signed timestamp must be within tolerance of now.
+  const ts = Number(parsed.t);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > SIG_TOLERANCE_SEC) {
+    return c.text("signature timestamp out of tolerance", 400);
+  }
+
   let event: StripeEvent;
   try {
     event = JSON.parse(rawBody) as StripeEvent;
@@ -113,11 +125,18 @@ app.post("/webhook", async (c) => {
       .run();
     if (!ins.meta.changes) return c.json({ received: true });
 
-    const meta = event.data?.object?.metadata ?? null;
-    const sub = meta?.sub;
-    const amountMicro = Number(meta?.amount_micro);
-    if (sub && Number.isFinite(amountMicro) && amountMicro > 0) {
-      await topUpMicro(c.env, sub, amountMicro, "stripe: " + eventId);
+    const obj = event.data?.object ?? null;
+    // Only credit a settled payment. Async methods fire this event with
+    // payment_status 'unpaid'/'no_payment_required' before money lands.
+    if (obj && obj.payment_status === "paid") {
+      const sub = obj.metadata?.sub;
+      // Trust the SETTLED amount (amount_total is minor units = cents), not the
+      // client-supplied metadata. micro-USD = cents * 10_000.
+      const amountMicro =
+        typeof obj.amount_total === "number" ? Math.round(obj.amount_total * 10000) : NaN;
+      if (sub && Number.isFinite(amountMicro) && amountMicro > 0) {
+        await topUpMicro(c.env, sub, amountMicro, "stripe: " + eventId);
+      }
     }
   }
 
