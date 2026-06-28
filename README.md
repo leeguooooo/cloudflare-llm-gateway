@@ -6,18 +6,23 @@ style gateway that runs entirely on the **free tier** (Workers + D1, no server, 
 
 ![cloudflare-llm-gateway — pool many AI keys behind one OpenAI-compatible API on Cloudflare](assets/hero.png)
 
-Pool many upstream AI API keys (Gemini, Mistral, OpenRouter) behind one stable
-OpenAI-compatible endpoint. Dead keys auto-disable, rate-limited keys cool down
-and auto-revive, and you get a built-in admin console + optional SSO.
+Pool many upstream AI API keys behind one stable OpenAI-compatible endpoint.
+Dead keys auto-disable, rate-limited keys cool down with progressive backoff and
+auto-revive, requests fall back across providers so callers never see a 503, and
+you get a built-in admin/consumer console — all on the free tier.
 
 ## Features
 
-- **OpenAI-compatible API** — `POST /v1/chat/completions`, `GET /v1/models`. Point any OpenAI SDK at it.
-- **Native passthrough** — `/gemini/*`, `/mistral/*`, `/openrouter/*` proxy each provider's raw API with a pooled key.
-- **Key pool with self-healing** — round-robin across active keys; `401/403` → auto-disable, `429`/quota → cooldown, success → revive. A cron (or `POST /admin/probe`) re-checks keys.
-- **Per-key console** — list every key (masked), its status & stats, with live "check / balance" (OpenRouter shows real credits) and enable/disable/delete.
-- **Roles** — admin manages the pool, users self-serve their own API tokens. Optional **OIDC SSO** (Authorization Code + PKCE) with an admin-approval gate; or simple bearer-token auth.
-- **$0 to run** — Cloudflare Workers + D1 free tier.
+- **9 providers, OpenAI-compatible** — Gemini, Mistral, OpenRouter, OpenAI, DeepSeek, Groq, Moonshot (Kimi), GLM (Zhipu), Qwen (DashScope). One `POST /v1/chat/completions` + `GET /v1/models`; route by model name or an explicit `provider:model` prefix. Native passthrough at `/gemini/*`, `/mistral/*`, … too.
+- **Self-healing key pool** — round-robin across active keys; `401/403`/arrears → auto-disable, `429`/quota → cooldown with **progressive backoff**, success → revive. Liveness probes use a real 1-token call (not a `/models` endpoint that lies about suspended/throttled accounts).
+- **Auto-fallback** — if the chosen provider is down/throttled, the request is transparently served by another provider with live keys (response carries `X-KeyPool-Provider/Model/Fallback`); opt out per request with `{"fallback": false}`. Callers never get a 503.
+- **Model-level availability** — models that a key can't actually serve (paid-only, not-found) are probed and hidden from `GET /v1/models`, so users only pick models that work.
+- **Per-key console** — every key (masked) with status, stats, last error, and a live "检测全部" batch check (OpenRouter/DeepSeek show real balance); enable/disable/delete; disabled keys hidden by default.
+- **Roles + SSO** — optional OIDC SSO (Authorization Code + PKCE) with an admin-approval gate, or simple bearer-token auth. Admins manage the pool and aren't metered; consumers self-serve their own tokens.
+- **Metering & billing** — per-request + per-token usage with daily charts and logs; optional credit billing (per-model input/output pricing, a global discount, per-token deduction) with Stripe top-up. Off by default.
+- **Token controls** — per-token quota, RPM limit, and expiry.
+- **Built-in chat** — consumer chat playground (streaming) and an admin per-key debug chat.
+- **$0 to run** — Cloudflare Workers + D1 free tier; unattended health-check via cron or an included GitHub Actions schedule.
 
 ## Architecture
 
@@ -68,7 +73,11 @@ Open the deployed URL to reach the admin console.
 | `POST /admin/keys/:id/enable\|disable`, `DELETE /admin/keys/:id` | admin | per-key ops |
 | `GET /admin/users`, `POST /admin/users/:id/approve\|block` | admin | approve consumers |
 | `GET/POST/DELETE /me/tokens` | session | consumers manage their own tokens |
-| `POST /admin/probe` | admin | run the health check on demand |
+| `POST /admin/check-all-keys` | admin | batch probe: revive healthy, disable dead |
+| `POST /admin/probe-models` / `GET /admin/models-status` | admin | model-level availability |
+| `GET /admin/usage` `/admin/logs` `/me/usage` `/me/logs` | admin / session | metering |
+| `GET /admin/balances` `POST /admin/balances/:sub/topup` `/admin/prices` | admin | billing |
+| `POST /me/checkout` `POST /stripe/webhook` | session / none | Stripe credit top-up |
 
 ### Import keys
 
