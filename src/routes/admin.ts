@@ -432,9 +432,10 @@ app.post("/balances/:sub/topup", async (c) => {
   return c.json({ balance_micro });
 });
 
-// GET /transactions — recent transactions across all consumers.
+// GET /transactions — recent transactions. ?owner=<sub> filters to one consumer.
 app.get("/transactions", async (c) => {
-  return c.json(await listTransactions(c.env, { limit: 100 }));
+  const sub = c.req.query("owner") || undefined;
+  return c.json(await listTransactions(c.env, { sub, limit: 100 }));
 });
 
 // GET /prices — list per-model token prices (micro-USD per 1M tokens, all columns).

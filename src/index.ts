@@ -29,6 +29,20 @@ app.get("/", (c) => c.html(adminPage(c.env)));
 // Public liveness probe — intentionally minimal (no pool inventory leak).
 app.get("/healthz", (c) => c.json({ ok: true }));
 
+// RFC 9728 — OAuth 2.0 Protected Resource Metadata. This gateway is a
+// token-protected API (an OIDC relying party, NOT an authorization server), so
+// it advertises itself as a protected resource and points agents at its
+// authorization server (the leeguoo SSO IdP) to obtain tokens.
+app.get("/.well-known/oauth-protected-resource", (c) => {
+  const as = (c.env.OIDC_ISSUER || "https://account.leeguoo.com").replace(/\/$/, "");
+  return c.json({
+    resource: new URL(c.req.url).origin,
+    authorization_servers: [as],
+    scopes_supported: ["openid", "profile", "email"],
+    bearer_methods_supported: ["header"],
+  });
+});
+
 app.route("/stripe", stripe);
 app.route("/auth", auth);
 app.route("/admin", admin);

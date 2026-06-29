@@ -674,10 +674,11 @@ const PAGE = String.raw`<!doctype html>
           <h2 class="h-blue"><span class="hd"></span>最近流水
             <span class="hint" style="margin-left:8px;font-weight:400">最多展示最近 100 条</span>
             <span style="flex:1"></span>
-            <button class="btn ghost small" id="bill-txns-refresh">刷新</button>
+            <select id="bill-txns-user" class="btn ghost small" style="max-width:200px"><option value="">全部用户</option></select>
+            <button class="btn ghost small" id="bill-txns-refresh" style="margin-left:6px">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>时间</th><th>sub</th><th>类型</th><th>金额 USD</th><th>余额 USD</th><th>模型</th><th>token</th><th>备注</th></tr></thead>
+            <thead><tr><th>时间</th><th>用户</th><th>类型</th><th>金额 USD</th><th>余额 USD</th><th>模型</th><th>token</th><th>备注</th></tr></thead>
             <tbody id="bill-txns-body"><tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
@@ -1226,7 +1227,12 @@ const PAGE = String.raw`<!doctype html>
     var amtc=(t.kind==='topup')?'var(--green)':'var(--red)';
     var sign=(t.kind==='topup')?'+':'-';
     var cells='<td style="color:var(--faint)">'+esc(time)+'</td>';
-    if(withSub) cells+='<td style="font-family:ui-monospace,monospace;font-size:12px" title="'+esc(String(t.sub||''))+'">'+esc(String(t.sub||'').slice(0,12))+'</td>';
+    if(withSub){
+      // show WHO consumed (email/name); fall back to the sub suffix; admin-minted = 管理员令牌
+      var who = t.owner_email || t.owner_name || (t.sub ? ('…'+String(t.sub).slice(-6)) : '管理员令牌');
+      var full = t.owner_email || t.owner_name || t.sub || '管理员令牌';
+      cells+='<td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(String(full))+'">'+esc(String(who))+'</td>';
+    }
     cells+='<td>'+esc(KIND_ZH[t.kind]||t.kind)+'</td>'
       +'<td class="n" style="color:'+amtc+'">'+sign+usd(Math.abs(t.amount_micro))+'</td>'
       +'<td class="n">'+usd(t.balance_after_micro)+'</td>'
@@ -1238,7 +1244,7 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- admin: billing ----------------
   function loadBilling(){
-    loadBalances(); loadBillingTxns(); loadPrices();
+    loadBalances(); loadBillingTxns(); loadPrices(); loadBillTxnsUsers();
     api('/admin/config').then(function(r){ if(!r.ok) return; var b=r.body||{};
       var zhe = b.discount!=null ? (b.discount*10) : 10;
       $('bill-config').innerHTML = '· 计费'+(b.billing_enabled?'<b style="color:var(--green)">开</b>':'<b style="color:var(--red)">关</b>')+' · 折扣 <b>'+zhe+'折</b>(市场价×'+(b.discount!=null?b.discount:1)+')';
@@ -1267,11 +1273,24 @@ const PAGE = String.raw`<!doctype html>
   }
   function loadBillingTxns(){
     var tb=$('bill-txns-body');
-    return api('/admin/transactions').then(function(r){
+    var sel=$('bill-txns-user'); var owner=sel?sel.value:'';
+    var q=owner?('?owner='+encodeURIComponent(owner)):'';
+    return api('/admin/transactions'+q).then(function(r){
       var list=Array.isArray(r.body)?r.body:[];
       if(!list.length){ tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">暂无</td></tr>'; return; }
       tb.innerHTML=list.map(function(t){ return txnRow(t, true); }).join('');
     }).catch(function(){ tb.innerHTML='<tr><td colspan="8" class="e">出错</td></tr>'; });
+  }
+  // populate the 最近流水 user filter once, from the balances list (has email+sub)
+  function loadBillTxnsUsers(){
+    var sel=$('bill-txns-user'); if(!sel||sel.__filled) return;
+    api('/admin/balances').then(function(r){
+      if(!r.ok) return;
+      var list=Array.isArray(r.body)?r.body:[];
+      var opts='<option value="">全部用户</option>';
+      list.forEach(function(b){ if(!b.sub) return; var label=b.email||('…'+String(b.sub).slice(-6)); opts+='<option value="'+esc(String(b.sub))+'">'+esc(label)+'</option>'; });
+      sel.innerHTML=opts; sel.__filled=true;
+    });
   }
   function topUp(){
     var sub=$('bill-sub').value.trim();
@@ -1872,6 +1891,7 @@ const PAGE = String.raw`<!doctype html>
   $('bill-topup').onclick = topUp;
   $('bill-balances-refresh').onclick = loadBalances;
   $('bill-txns-refresh').onclick = loadBillingTxns;
+  $('bill-txns-user').onchange = loadBillingTxns;
   $('prices-refresh').onclick = loadPrices;
   $('price-save').onclick = savePrice;
   $('bal-refresh').onclick = loadBalance;
