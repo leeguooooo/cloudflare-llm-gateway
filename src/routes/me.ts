@@ -18,6 +18,7 @@ import {
   recentLogs,
   getBalanceMicro,
   listTransactions,
+  modelStats,
 } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -102,6 +103,17 @@ app.get("/logs", async (c) => {
     return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
   }
   return c.json(await recentLogs(c.env, { ownerSub: session.sub, limit: 50 }));
+});
+
+// GET /model-stats — global per-model performance leaderboard (last 7 days), so a
+// consumer can pick a fast/reliable model. Aggregate-only (no per-user identity).
+app.get("/model-stats", async (c) => {
+  const session = await getSession(c.env, c.req.raw);
+  if (!session) {
+    return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
+  }
+  const sinceMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return c.json(await modelStats(c.env, { sinceMs, limit: 100 }));
 });
 
 // GET /balance — the caller's own balance in micro-USD.

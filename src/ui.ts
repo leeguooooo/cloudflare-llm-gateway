@@ -312,6 +312,27 @@ const PAGE = String.raw`<!doctype html>
         </div>
       </section>
 
+      <!-- ----- consumer: 模型排行 ----- -->
+      <section class="section" id="sec-modelstats">
+        <h2 class="sec-h">模型排行</h2>
+        <p class="sec-sub">// 按真实调用数据对比,挑选最合适的模型</p>
+        <p class="hint" style="margin-top:0">近 7 天全网真实请求统计。延迟、平均输出按成功请求计算;点表头可排序。响应延迟越低越快。</p>
+        <div class="card r1">
+          <h2 class="h-green"><span class="hd"></span>模型对比<span style="flex:1"></span><button class="btn ghost small" id="modelstats-refresh">刷新</button></h2>
+          <table>
+            <thead><tr>
+              <th>模型</th><th>来源</th>
+              <th class="ms-sort n" data-sort="avg_latency">响应延迟 ▲</th>
+              <th class="ms-sort n" data-sort="rate">成功率</th>
+              <th class="ms-sort n" data-sort="avg_out">平均输出</th>
+              <th class="ms-sort n" data-sort="n">近7天调用</th>
+            </tr></thead>
+            <tbody id="modelstats-body"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody>
+          </table>
+          <div class="hint">响应延迟:开始返回的耗时(流式为首字节 TTFT,非流式为整次往返)。样本越多(近7天调用)越可信;无成功样本的模型延迟显示 –。</div>
+        </div>
+      </section>
+
       <!-- ----- shared: 文档 ----- -->
       <section class="section" id="sec-docs">
         <h2 class="sec-h">文档</h2>
@@ -806,6 +827,66 @@ const PAGE = String.raw`<!doctype html>
     bindCopy(tb);
   }
 
+  // ---------------- model leaderboard (consumer) ----------------
+  var msRows=null;            // cached /me/model-stats rows
+  var msSort='avg_latency';   // current sort key
+  var msAsc=true;             // ascending? (latency default asc = fastest first)
+  function loadModelStats(){
+    var tb=$('modelstats-body'); if(!tb) return;
+    tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr>';
+    return api('/me/model-stats').then(function(r){
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="6" style="color:var(--red)">加载失败 · <button class="btn ghost small" id="ms-retry">重试</button></td></tr>'; var rb=$('ms-retry'); if(rb) rb.onclick=loadModelStats; return; }
+      msRows=Array.isArray(r.body)?r.body:[];
+      renderModelStats();
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="6" style="color:var(--red)">网络错误</td></tr>'; });
+  }
+  // sort key; models with no successful sample have meaningless latency/output, so
+  // they always sink (Infinity in asc, -Infinity in desc) regardless of column.
+  function msVal(x,k){
+    if(k==='rate') return x.n>0?x.ok/x.n:0;
+    if(k==='n') return x.n||0;
+    if(x.ok<=0) return msAsc?Infinity:-Infinity; // latency/avg_out undefined without a success
+    return x[k]||0;
+  }
+  function renderModelStats(){
+    var tb=$('modelstats-body'); if(!tb) return;
+    if(!msRows || !msRows.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">近 7 天还没有调用数据</td></tr>'; return; }
+    var rows=msRows.slice().sort(function(a,b){ var d=msVal(a,msSort)-msVal(b,msSort); return msAsc?d:-d; });
+    tb.innerHTML=rows.map(function(x){
+      var d=MODEL_LABELS[x.model];
+      var prov=x.provider?('<span class="badge">'+esc(PROVIDER_ZH[String(x.provider).toLowerCase()]||x.provider)+'</span>'):'<span style="color:var(--faint)">–</span>';
+      var rate=x.n>0?Math.round(x.ok/x.n*100):0;
+      var ratec=rate>=95?'var(--green)':(rate>=80?'var(--amber)':'var(--red)');
+      var hasOk=x.ok>0;
+      return '<tr><td style="font-weight:700" class="mono-token copyable" data-copy="'+esc(x.model)+'" title="点击复制">'+esc(x.model)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td>'
+        +'<td>'+prov+'</td>'
+        +'<td class="n">'+(hasOk?fmtNum(Math.round(x.avg_latency))+' ms':'<span style="color:var(--faint)">–</span>')+'</td>'
+        +'<td class="n" style="color:'+ratec+'">'+rate+'%</td>'
+        +'<td class="n">'+(hasOk?fmtNum(Math.round(x.avg_out)):'<span style="color:var(--faint)">–</span>')+'</td>'
+        +'<td class="n">'+fmtNum(x.n)+'</td></tr>';
+    }).join('');
+    bindCopy(tb);
+    // reflect the active sort column + direction in the header arrows
+    Array.prototype.forEach.call(document.querySelectorAll('#sec-modelstats .ms-sort'), function(th){
+      var k=th.getAttribute('data-sort'); var base=th.textContent.replace(/[ ▲▼]+$/,'');
+      th.textContent = base + (k===msSort ? (msAsc?' ▲':' ▼') : '');
+      th.style.cursor='pointer';
+    });
+  }
+  function initModelStats(){
+    var rf=$('modelstats-refresh'); if(rf) rf.onclick=loadModelStats;
+    Array.prototype.forEach.call(document.querySelectorAll('#sec-modelstats .ms-sort'), function(th){
+      th.onclick=function(){
+        var k=th.getAttribute('data-sort');
+        // same column toggles direction; a new column defaults to latency-asc (fastest)
+        // or descending for the rest (higher tps/rate/output/调用 = better first).
+        if(msSort===k){ msAsc=!msAsc; } else { msSort=k; msAsc=(k==='avg_latency'); }
+        renderModelStats();
+      };
+    });
+    loadModelStats();
+  }
+
   // ---------------- sidebar nav ----------------
   var NAV = {
     user: [
@@ -813,6 +894,7 @@ const PAGE = String.raw`<!doctype html>
       {id:'chat',      label:'聊天', color:'blue'},
       {id:'tokens',    label:'我的令牌', color:'blue'},
       {id:'models',    label:'模型', color:'green'},
+      {id:'modelstats',label:'模型排行', color:'green'},
       {id:'usage',     label:'用量', color:'amber'},
       {id:'balance',   label:'余额', color:'red'},
       {id:'docs',      label:'文档', color:'yellow'}
@@ -863,6 +945,7 @@ const PAGE = String.raw`<!doctype html>
       loadModels().then(function(){ renderModelsInto('models-body'); renderModelsInto('docs-models-body'); fillDocs(); var mu=$('models-updated'); if(mu) mu.textContent=modelsFetchedAt?'更新于 '+fmtDate(modelsFetchedAt):''; });
       var mrf=$('models-refresh'); if(mrf) mrf.onclick=function(){ mrf.disabled=true; loadModels().then(function(){ renderModelsInto('models-body'); var mu=$('models-updated'); if(mu) mu.textContent=modelsFetchedAt?'更新于 '+fmtDate(modelsFetchedAt):''; mrf.disabled=false; }); };
     }
+    if(id==='modelstats') initModelStats();
     if(id==='dashboard') loadModels().then(loadDashboard);
     if(id==='tokens'){ var mo=$('my-mint-out'); if(mo){ mo.style.display='none'; mo.innerHTML=''; } loadMyTokens(); }
     if(id==='overview') loadStats('ov');
