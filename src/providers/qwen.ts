@@ -9,7 +9,9 @@ const qwen: ProviderAdapter = {
   name: "qwen",
 
   models(): string[] {
-    return ["qwen-plus", "qwen-turbo", "qwen-max", "qwen2.5-72b-instruct"];
+    // qwen2.5-72b-instruct removed: upstream returns "Access denied" for these
+    // keys (no permission). Re-add if a key gains access to the open models.
+    return ["qwen-plus", "qwen-turbo", "qwen-max"];
   },
 
   async chatCompletions(req: OpenAIChatRequest, key: string): Promise<Response> {

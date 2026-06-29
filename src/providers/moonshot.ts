@@ -9,12 +9,9 @@ const moonshot: ProviderAdapter = {
   name: "moonshot",
 
   models(): string[] {
-    return [
-      "moonshot-v1-8k",
-      "moonshot-v1-32k",
-      "moonshot-v1-128k",
-      "kimi-k2-0711-preview",
-    ];
+    // kimi-k2-0711-preview removed: upstream returns "Not found the model" for
+    // these keys (name retired / no permission). Re-add if a key gains access.
+    return ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"];
   },
 
   async chatCompletions(req: OpenAIChatRequest, key: string): Promise<Response> {
