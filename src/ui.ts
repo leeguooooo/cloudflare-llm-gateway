@@ -1314,6 +1314,9 @@ const PAGE = String.raw`<!doctype html>
   // ---------------- billing / balance (money in micro-USD) ----------------
   function usd(micro){ return ((micro==null?0:micro)/1000000).toFixed(4); }
   function usd2(micro){ return ((micro==null?0:micro)/1000000).toFixed(2); }
+  // micro precision (6dp) for the ledger — cheap models charge 1 micro-USD per
+  // request, which toFixed(4) would render as a misleading 0.0000.
+  function usd6(micro){ return ((micro==null?0:micro)/1000000).toFixed(6); }
   function txnRow(t, withSub){
     var time=fmtDate(t.created_at);
     var amtc=(t.kind==='topup')?'var(--green)':'var(--red)';
@@ -1326,8 +1329,8 @@ const PAGE = String.raw`<!doctype html>
       cells+='<td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(String(full))+'">'+esc(String(who))+'</td>';
     }
     cells+='<td>'+esc(KIND_ZH[t.kind]||t.kind)+'</td>'
-      +'<td class="n" style="color:'+amtc+'">'+sign+usd(Math.abs(t.amount_micro))+'</td>'
-      +'<td class="n">'+usd(t.balance_after_micro)+'</td>'
+      +'<td class="n" style="color:'+amtc+'">'+sign+usd6(Math.abs(t.amount_micro))+'</td>'
+      +'<td class="n">'+usd6(t.balance_after_micro)+'</td>'
       +'<td>'+esc(t.model||'–')+'</td>'
       +'<td class="n">'+(t.tokens==null?'–':t.tokens)+'</td>'
       +'<td style="color:var(--faint)">'+esc(t.note||'–')+(t.estimated?' <span class="badge" title="上游未回报用量,按上限预估">预估</span>':'')+'</td>';
