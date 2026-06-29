@@ -6,7 +6,7 @@ import { PROVIDERS } from "../types";
 import type { OpenAIChatRequest } from "../providers/types";
 import { getAdapter } from "../providers";
 import { requireUser, resolveCaller } from "../auth";
-import { checkTokenLimits, providersWithActiveKeys, availableModelSet } from "../db";
+import { checkTokenLimits, providersWithActiveKeys, availableModelSet, getBalanceMicro, getChargeTotalMicro } from "../db";
 import { serveChat } from "../chat";
 import { anthropicToOpenAI, openAIToAnthropic, openAIStreamToAnthropic } from "../anthropic";
 import type { AnthropicRequest } from "../anthropic";
@@ -66,6 +66,38 @@ app.post("/chat/completions", async (c) => {
     }
   }
   return serveChat(c.env, c.executionCtx, body, caller);
+});
+
+/**
+ * Industry-standard balance endpoints (OpenAI legacy billing shape), the format
+ * NewAPI/OneAPI + most clients (ChatGPT-Next-Web, Lobe, Bob, 沉浸式翻译, …) read.
+ * Balance = hard_limit_usd − total_usage/100. Authed by the caller's token.
+ */
+app.get("/dashboard/billing/subscription", async (c) => {
+  const caller = await resolveCaller(c.env, c.req.raw);
+  let grantedUsd = 999999; // admin / unattributed token => effectively unlimited
+  if (caller.ownerSub) {
+    const balance = await getBalanceMicro(c.env, caller.ownerSub);
+    const spent = await getChargeTotalMicro(c.env, caller.ownerSub);
+    grantedUsd = (balance + spent) / 1_000_000; // total granted = remaining + spent
+  }
+  return c.json({
+    object: "billing_subscription",
+    has_payment_method: true,
+    canceled: false,
+    soft_limit_usd: grantedUsd,
+    hard_limit_usd: grantedUsd,
+    system_hard_limit_usd: grantedUsd,
+    access_until: 0,
+  });
+});
+
+app.get("/dashboard/billing/usage", async (c) => {
+  const caller = await resolveCaller(c.env, c.req.raw);
+  let spentMicro = 0;
+  if (caller.ownerSub) spentMicro = await getChargeTotalMicro(c.env, caller.ownerSub);
+  // total_usage is in cents (USD * 100).
+  return c.json({ object: "list", total_usage: (spentMicro / 1_000_000) * 100 });
 });
 
 /** POST /messages — Anthropic Messages API. Translates to OpenAI, dispatches
