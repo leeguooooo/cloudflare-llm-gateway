@@ -65,6 +65,10 @@ function extractToken(req: Request): string | null {
   const goog = req.headers.get("x-goog-api-key");
   if (goog && goog.trim()) return goog.trim();
 
+  // Anthropic-native clients (Claude Code / SDK) send the key as `x-api-key`.
+  const anthropic = req.headers.get("x-api-key");
+  if (anthropic && anthropic.trim()) return anthropic.trim();
+
   try {
     const url = new URL(req.url);
     const key = url.searchParams.get("key");
