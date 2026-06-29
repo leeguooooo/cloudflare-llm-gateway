@@ -19,6 +19,7 @@ import {
   deleteKey,
   prunePermanentlyDeadKeys,
   usageSummary,
+  usageByUser,
   recentLogs,
   listBalances,
   topUpMicro,
@@ -130,15 +131,28 @@ app.get("/config", (c) => {
   });
 });
 
-// GET /usage — global usage aggregates (last 30 days).
+// GET /usage — global usage aggregates (last 30 days). ?owner=<sub> scopes to one user.
 app.get("/usage", async (c) => {
   const sinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  return c.json(await usageSummary(c.env, { sinceMs }));
+  const owner = c.req.query("owner") || undefined;
+  return c.json(await usageSummary(c.env, { sinceMs, ownerSub: owner }));
 });
 
-// GET /logs — most recent requests across all callers.
+// GET /usage/by-user — per-user usage leaderboard (last 30 days), ranked by requests.
+app.get("/usage/by-user", async (c) => {
+  const sinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  return c.json(await usageByUser(c.env, { sinceMs, limit: 100 }));
+});
+
+// GET /logs — recent requests. ?owner=<sub> filters to one user; ?page=N&size=M paginates.
 app.get("/logs", async (c) => {
-  return c.json(await recentLogs(c.env, { limit: 100 }));
+  const owner = c.req.query("owner") || undefined;
+  const size = Math.min(200, Math.max(1, parseInt(c.req.query("size") || "50", 10) || 50));
+  const page = Math.max(0, parseInt(c.req.query("page") || "0", 10) || 0);
+  // Fetch one extra row to tell the UI whether a next page exists.
+  const rows = await recentLogs(c.env, { ownerSub: owner, limit: size + 1, offset: page * size });
+  const hasMore = rows.length > size;
+  return c.json({ rows: hasMore ? rows.slice(0, size) : rows, page, size, hasMore });
 });
 
 // POST /probe — run the unattended health check on demand (revive expired

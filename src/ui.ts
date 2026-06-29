@@ -559,8 +559,23 @@ const PAGE = String.raw`<!doctype html>
           <table><thead><tr><th>供应商</th><th>请求</th><th>成功</th><th>平均延迟</th><th>token</th></tr></thead>
           <tbody id="l-byprov"><tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr></tbody></table>
         </div>
+        <div class="card r1" style="margin-top:14px">
+          <h2 class="h-red"><span class="hd"></span>用户使用排行 · 近 30 天
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="rank-refresh">刷新</button>
+          </h2>
+          <table><thead><tr><th>#</th><th>用户</th><th>请求</th><th>成功率</th><th>token</th><th>最近</th></tr></thead>
+          <tbody id="l-rank"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+          <div class="hint">点某一行可只看该用户的日志。</div>
+        </div>
         <div class="card r2" style="margin-top:14px">
-          <h2 class="h-blue"><span class="hd"></span>最近请求</h2>
+          <h2 class="h-blue"><span class="hd"></span>最近请求
+            <span style="flex:1"></span>
+            <select id="logs-user" class="btn ghost small" style="max-width:200px"><option value="">全部用户</option></select>
+            <button class="btn ghost small" id="logs-prev" style="margin-left:6px" disabled>上一页</button>
+            <span id="logs-page" class="hint" style="margin:0 6px">第 1 页</span>
+            <button class="btn ghost small" id="logs-next" disabled>下一页</button>
+          </h2>
           <table><thead><tr><th>时间</th><th>用户</th><th>供应商</th><th>模型</th><th>状态</th><th>延迟</th><th>token</th></tr></thead>
           <tbody id="l-recent"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody></table>
         </div>
@@ -772,7 +787,14 @@ const PAGE = String.raw`<!doctype html>
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
     if(id==='usage') loadUserUsage();
-    if(id==='logs'){ var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage; loadAdminUsage(); }
+    if(id==='logs'){
+      var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage;
+      var rr=$('rank-refresh'); if(rr) rr.onclick=loadAdminRank;
+      var su=$('logs-user'); if(su) su.onchange=function(){ logsOwner=su.value; logsPage=0; loadAdminUsage(); };
+      var pv=$('logs-prev'); if(pv) pv.onclick=function(){ if(logsPage>0){ logsPage--; loadAdminLogs(); } };
+      var nx=$('logs-next'); if(nx) nx.onclick=function(){ logsPage++; loadAdminLogs(); };
+      loadAdminUsage();
+    }
     if(id==='billing') loadBilling();
     if(id==='balance') loadBalance();
     if(id==='chat') initChat();
@@ -955,9 +977,68 @@ const PAGE = String.raw`<!doctype html>
     api('/me/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); } });
     api('/me/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); });
   }
+  // admin logs view state: owner filter (owner_sub, '' = all) + zero-based page.
+  var logsOwner='';
+  var logsPage=0;
+  function fmtUser(o){
+    return o.owner_email || o.owner_name || (o.owner_sub ? ('…'+String(o.owner_sub).slice(-6)) : '管理员令牌');
+  }
+  function loadAdminLogs(){
+    var q='?page='+logsPage+'&size=50'+(logsOwner?('&owner='+encodeURIComponent(logsOwner)):'');
+    return api('/admin/logs'+q).then(function(r){
+      if(!r.ok) return;
+      var b=r.body||{}; var rows=b.rows||[];
+      renderRecent(rows,'l-recent',true);
+      var pg=$('logs-page'); if(pg) pg.textContent='第 '+(logsPage+1)+' 页';
+      var pv=$('logs-prev'); if(pv) pv.disabled = logsPage<=0;
+      var nx=$('logs-next'); if(nx) nx.disabled = !b.hasMore;
+    });
+  }
+  function loadAdminRank(){
+    return api('/admin/usage/by-user').then(function(r){
+      if(!r.ok) return;
+      var rows=Array.isArray(r.body)?r.body:[];
+      var tb=$('l-rank'); if(!tb) return;
+      if(!rows.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">暂无</td></tr>'; return; }
+      tb.innerHTML=rows.map(function(u,i){
+        var rate=u.n>0?Math.round(u.ok/u.n*100)+'%':'–';
+        var last=u.last_at?new Date(u.last_at).toISOString().slice(5,16).replace('T',' '):'–';
+        var full=u.owner_email||u.owner_name||u.owner_sub||'管理员令牌';
+        return '<tr data-sub="'+esc(String(u.owner_sub||''))+'" style="cursor:pointer">'
+          +'<td class="n">'+(i+1)+'</td>'
+          +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(String(full))+'">'+esc(fmtUser(u))+'</td>'
+          +'<td class="n">'+u.n+'</td><td class="n">'+rate+'</td>'
+          +'<td class="n">'+(u.tokens||0)+'</td>'
+          +'<td style="color:var(--faint)">'+last+'</td></tr>';
+      }).join('');
+      Array.prototype.forEach.call(tb.querySelectorAll('tr[data-sub]'),function(tr){
+        tr.onclick=function(){
+          logsOwner=tr.getAttribute('data-sub'); logsPage=0;
+          var sel=$('logs-user'); if(sel) sel.value=logsOwner;
+          loadAdminUsage();
+        };
+      });
+    });
+  }
+  function loadAdminUsers(){
+    var sel=$('logs-user'); if(!sel||sel.__filled) return;
+    api('/admin/users').then(function(r){
+      if(!r.ok) return;
+      var users=Array.isArray(r.body)?r.body:[];
+      var opts='<option value="">全部用户</option>';
+      users.forEach(function(u){
+        var label=u.email||u.name||('…'+String(u.sub).slice(-6));
+        opts+='<option value="'+esc(String(u.sub))+'">'+esc(label)+'</option>';
+      });
+      sel.innerHTML=opts; sel.__filled=true; sel.value=logsOwner;
+    });
+  }
   function loadAdminUsage(){
-    api('/admin/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'l'); renderDayChart('l-chart', r.body&&r.body.byDay); } });
-    api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent', true); });
+    var oq=logsOwner?('?owner='+encodeURIComponent(logsOwner)):'';
+    api('/admin/usage'+oq).then(function(r){ if(r.ok){ renderUsage(r.body,'l'); renderDayChart('l-chart', r.body&&r.body.byDay); } });
+    loadAdminLogs();
+    loadAdminRank();
+    loadAdminUsers();
   }
 
   // ---------------- billing / balance (money in micro-USD) ----------------
