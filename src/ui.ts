@@ -1096,7 +1096,12 @@ const PAGE = String.raw`<!doctype html>
     if(btn) btn.disabled=true; if(out) out.textContent='检测中…(几十个 key 需要十几秒)';
     api('/admin/check-all-keys',{method:'POST'}).then(function(r){
       if(btn) btn.disabled=false; var b=r.body||{};
-      if(out) out.innerHTML='<span style="color:var(--green)">可用 '+(b.alive||0)+'</span> / 不可用 '+(b.dead||0)+(b.capped?' · 已截断(过多)':'');
+      if(out){
+        var base='<span style="color:var(--green)">可用 '+(b.alive||0)+'</span> / 不可用 '+(b.dead||0);
+        out.innerHTML = b.capped
+          ? base+' · 本轮检测 '+(b.checked||0)+'/'+(b.total||0)+'(单次上限,其余下轮自动轮替)'
+          : base;
+      }
       loadKeyList();
     }).catch(function(){ if(btn) btn.disabled=false; if(out) out.textContent='出错'; });
   }

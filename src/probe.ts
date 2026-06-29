@@ -8,7 +8,7 @@
 
 import type { Env, Provider } from "./types";
 import { PROVIDERS } from "./types";
-import { listAllKeys, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
+import { listAllKeys, listKeysForProbe, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
 import { getAdapter } from "./providers";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "./keypool";
 
@@ -140,9 +140,12 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
 export async function runCheckAll(
   env: Env,
   limit = 48
-): Promise<{ checked: number; alive: number; dead: number; capped: boolean }> {
-  const all = await listAllKeys(env);
-  const subset = all.slice(0, limit);
+): Promise<{ checked: number; alive: number; dead: number; capped: boolean; total: number }> {
+  // Worker free tier caps outbound subrequests (~50/request), so probe at most
+  // `limit` keys per run — the LEAST-recently-touched first, so successive runs
+  // (button + the periodic auto health-check) rotate through the whole pool.
+  const total = (await listAllKeys(env)).length;
+  const subset = await listKeysForProbe(env, limit);
   const results = await Promise.all(
     subset.map(async (k) => {
       try {
@@ -177,7 +180,7 @@ export async function runCheckAll(
     })
   );
   const alive = results.filter(Boolean).length;
-  return { checked: results.length, alive, dead: results.length - alive, capped: all.length > subset.length };
+  return { checked: results.length, alive, dead: results.length - alive, capped: total > subset.length, total };
 }
 
 /**
