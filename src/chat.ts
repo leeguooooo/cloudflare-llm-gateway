@@ -9,7 +9,7 @@
 import type { Env, Provider } from "./types";
 import { PROVIDERS } from "./types";
 import type { OpenAIChatRequest } from "./providers/types";
-import { routeModelToProvider, FALLBACK_MODEL } from "./providers/types";
+import { routeModelToProvider, FALLBACK_MODEL, clampMaxTokens } from "./providers/types";
 import { getAdapter } from "./providers";
 import { callWithPool } from "./keypool";
 import {
@@ -78,7 +78,13 @@ export async function serveChat(
       const prov = order[i];
       const adapter = getAdapter(prov);
       const useModel = prov === provider ? body.model : FALLBACK_MODEL[prov];
-      const reqBody: OpenAIChatRequest = prov === provider ? body : { ...body, model: useModel };
+      // Clamp max_tokens to the provider's cap: an over-limit value makes some
+      // upstreams reject (or emit an empty SSE stream) instead of serving.
+      const clamped = clampMaxTokens(prov, (body as { max_tokens?: number }).max_tokens);
+      const reqBody: OpenAIChatRequest =
+        prov === provider
+          ? { ...body, max_tokens: clamped }
+          : { ...body, model: useModel, max_tokens: clamped };
       res = await callWithPool(env, prov, (key) => adapter.chatCompletions(reqBody, key), {
         model: useModel,
         tokenId: caller.tokenId,
