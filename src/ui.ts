@@ -422,8 +422,8 @@ const PAGE = String.raw`<!doctype html>
             <button class="btn ghost small" id="keylist-refresh">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>供应商</th><th>key</th><th>请求/失败</th><th>上次错误</th><th>测活 / 余额</th><th>操作</th></tr></thead>
-            <tbody id="keylist-body"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <thead><tr><th>供应商</th><th>key</th><th>请求/失败</th><th>上次错误</th><th>测活 / 余额</th><th>添加时间</th><th>操作</th></tr></thead>
+            <tbody id="keylist-body"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
           <div class="hint">「测活」实时探测:OpenRouter 显示真实余额;Gemini/Mistral 只能判断是否可用(限流也算可用)。探活成功会自动把禁用/冷却的 key 拉回可用。</div>
         </div>
@@ -561,8 +561,8 @@ const PAGE = String.raw`<!doctype html>
         </div>
         <div class="card r2" style="margin-top:14px">
           <h2 class="h-blue"><span class="hd"></span>最近请求</h2>
-          <table><thead><tr><th>时间</th><th>供应商</th><th>模型</th><th>状态</th><th>延迟</th><th>token</th></tr></thead>
-          <tbody id="l-recent"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody></table>
+          <table><thead><tr><th>时间</th><th>用户</th><th>供应商</th><th>模型</th><th>状态</th><th>延迟</th><th>token</th></tr></thead>
+          <tbody id="l-recent"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody></table>
         </div>
       </section>
 
@@ -902,16 +902,24 @@ const PAGE = String.raw`<!doctype html>
     }).join('');
     $(p+'-byprov').innerHTML = rows || '<tr><td colspan="5" style="color:var(--faint)">暂无</td></tr>';
   }
-  function renderRecent(rows, tbodyId){
+  function renderRecent(rows, tbodyId, showOwner){
+    var cols = showOwner ? 7 : 6;
     var html=(rows||[]).map(function(r){
       var t=new Date(r.created_at).toISOString().slice(5,16).replace('T',' ');
       var okc=r.ok?'var(--green)':'var(--red)';
-      return '<tr><td style="color:var(--faint)">'+t+'</td><td>'+esc(r.provider)+'</td>'
+      var owner='';
+      if(showOwner){
+        // admin view: who sent it. owner_sub NULL = an admin-minted token (no user).
+        var who = r.owner_email || r.owner_name || (r.owner_sub ? ('…'+String(r.owner_sub).slice(-6)) : '管理员令牌');
+        var full = r.owner_email || r.owner_name || r.owner_sub || '管理员令牌';
+        owner='<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(String(full))+'">'+esc(String(who))+'</td>';
+      }
+      return '<tr><td style="color:var(--faint)">'+t+'</td>'+owner+'<td>'+esc(r.provider)+'</td>'
         +'<td>'+esc(r.model||'–')+'</td><td style="color:'+okc+'">'+(r.status_code==null?'–':r.status_code)+'</td>'
         +'<td class="n">'+(r.latency_ms==null?'–':r.latency_ms+'ms')+'</td>'
         +'<td class="n">'+(r.total_tokens==null?'–':r.total_tokens)+'</td></tr>';
     }).join('');
-    $(tbodyId).innerHTML = html || '<tr><td colspan="6" style="color:var(--faint)">暂无</td></tr>';
+    $(tbodyId).innerHTML = html || '<tr><td colspan="'+cols+'" style="color:var(--faint)">暂无</td></tr>';
   }
   // Inline SVG daily bar chart: last 14 days (byDay is newest-first), drawn
   // oldest->newest, ok in green stacked under failures in the red accent.
@@ -949,7 +957,7 @@ const PAGE = String.raw`<!doctype html>
   }
   function loadAdminUsage(){
     api('/admin/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'l'); renderDayChart('l-chart', r.body&&r.body.byDay); } });
-    api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent'); });
+    api('/admin/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'l-recent', true); });
   }
 
   // ---------------- billing / balance (money in micro-USD) ----------------
@@ -1108,14 +1116,14 @@ const PAGE = String.raw`<!doctype html>
   var keylistShowDisabled = false;
   function loadKeyList(){
     var tb=$('keylist-body');
-    tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr>';
+    tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/keys/list').then(function(r){
       var all=(r.body && r.body.keys) || [];
       var disN = all.filter(function(k){return k.status==='disabled';}).length;
       var tg=$('keylist-toggle'); if(tg) tg.textContent = keylistShowDisabled ? '只看启用' : ('显示禁用('+disN+')');
       var keys = keylistShowDisabled ? all : all.filter(function(k){return k.status!=='disabled';});
-      if(!all.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">还没有 key</td></tr>'; return; }
-      if(!keys.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">全部已禁用 · 点「显示禁用」查看</td></tr>'; return; }
+      if(!all.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">还没有 key</td></tr>'; return; }
+      if(!keys.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">全部已禁用 · 点「显示禁用」查看</td></tr>'; return; }
       tb.innerHTML = keys.map(function(k){
         // active + a lingering last_error = valid key that's currently failing
         // (e.g. throttled gemini) — show amber 'warn', not a misleading green.
@@ -1139,6 +1147,7 @@ const PAGE = String.raw`<!doctype html>
           +'<td class="n">'+k.total_requests+' / '+k.total_fails+'</td>'
           +'<td style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis">'+err+'</td>'
           +'<td class="kl-result" style="font-size:12.5px;white-space:nowrap"></td>'
+          +'<td style="color:var(--faint);font-size:12px;white-space:nowrap" title="'+(k.created_at?esc(new Date(k.created_at).toLocaleString()):'')+'">'+(k.created_at?fmtDate(k.created_at):'–')+'</td>'
           +'<td style="white-space:nowrap"><button class="btn ghost small kl-check">测活</button> '+toggle+' <button class="btn ghost small kl-del">删</button></td>'
           +'</tr>';
       }).join('');
