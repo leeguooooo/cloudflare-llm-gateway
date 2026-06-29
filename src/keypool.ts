@@ -143,6 +143,8 @@ export async function callWithPool(
     ownerSub?: string | null;
     promptChars?: number;
     ctx?: { waitUntil(promise: Promise<unknown>): void };
+    /** Max pooled keys to try this call (fallback providers pass a small value). */
+    maxKeys?: number;
     /** When false, the terminal FAILURE log row is written final=0 (the caller
      *  owns writing the single final row — used by the fallback chain so one
      *  user request isn't counted once per attempted provider). Default true. */
@@ -174,7 +176,10 @@ export async function callWithPool(
     return noKeysResponse(provider);
   }
 
-  const limit = Math.max(1, maxRetries(env));
+  // Cap key attempts; a fallback provider passes a smaller maxKeys so it fails
+  // fast instead of burning 4 round-trips on a throttled pool.
+  const cap = meta?.maxKeys && meta.maxKeys > 0 ? meta.maxKeys : maxRetries(env);
+  const limit = Math.max(1, Math.min(cap, maxRetries(env)));
   const coolMins = cooldownMinutes(env);
   const opts = {
     cooldownMinutes: coolMins,

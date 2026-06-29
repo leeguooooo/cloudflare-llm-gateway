@@ -17,7 +17,7 @@ import type { Env, Provider } from "../types";
 import { requireUser, resolveCaller } from "../auth";
 import { callWithPool } from "../keypool";
 import { getAdapter } from "../providers";
-import { checkTokenLimits, incrementTokenUse, billingEnabled, getBalanceMicro } from "../db";
+import { checkTokenLimits, incrementTokenUse, billingEnabled, estimateMaxCostMicro, reserveBalance, refundBalance } from "../db";
 
 type AppEnv = { Bindings: Env };
 
@@ -54,23 +54,34 @@ function handle(provider: Provider): (c: Context<AppEnv>) => Promise<Response> {
         return c.json({ error: { message: chk.message, type: "limit_exceeded" } }, chk.status as 429);
       }
     }
-    if (billingEnabled(c.env) && caller.ownerSub) {
-      const bal = await getBalanceMicro(c.env, caller.ownerSub);
-      if (bal <= 0) return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
-    }
     // Price native passthrough at the provider's default model (the raw body
     // isn't parsed here) instead of the global default fallback price.
     const billModel = getAdapter(provider).models()[0] ?? null;
-    const res = await callWithPool(
-      c.env,
-      provider,
-      (key: string) => getAdapter(provider).passthrough(subPath, req, key),
-      { model: billModel, tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx }
-    );
-    if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
-      await incrementTokenUse(c.env, caller.tokenId);
+
+    // Billing: reserve a max-cost hold (concurrency-safe gate), refund after.
+    const billing = billingEnabled(c.env) && !!caller.ownerSub;
+    let hold = 0;
+    if (billing) {
+      hold = await estimateMaxCostMicro(c.env, billModel, 0, null);
+      const okReserve = await reserveBalance(c.env, caller.ownerSub as string, hold);
+      if (!okReserve) {
+        return c.json({ error: { message: "余额不足,请充值", type: "insufficient_balance" } }, 402);
+      }
     }
-    return res;
+    try {
+      const res = await callWithPool(
+        c.env,
+        provider,
+        (key: string) => getAdapter(provider).passthrough(subPath, req, key),
+        { model: billModel, tokenId: caller.tokenId, ownerSub: caller.ownerSub, ctx: c.executionCtx }
+      );
+      if (caller.tokenId !== null && res.status >= 200 && res.status <= 299) {
+        await incrementTokenUse(c.env, caller.tokenId);
+      }
+      return res;
+    } finally {
+      if (billing && hold > 0) await refundBalance(c.env, caller.ownerSub as string, hold);
+    }
   };
 }
 

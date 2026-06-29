@@ -89,6 +89,24 @@ export function routeModelToProvider(model: string): Provider {
   return "openrouter";
 }
 
+/**
+ * Cheapest reliable model per provider, used when FALLING BACK (the user's
+ * chosen model is unavailable) so we don't substitute an expensive flagship
+ * (e.g. mistral-large) and burn balance. Falls back to the adapter's first
+ * model if a provider isn't listed.
+ */
+export const FALLBACK_MODEL: Record<Provider, string> = {
+  gemini: "gemini-1.5-flash",
+  mistral: "mistral-small-latest",
+  openrouter: "meta-llama/llama-3.3-70b-instruct",
+  openai: "gpt-4o-mini",
+  deepseek: "deepseek-chat",
+  groq: "llama-3.1-8b-instant",
+  moonshot: "moonshot-v1-8k",
+  glm: "glm-4-flash",
+  qwen: "qwen-turbo",
+};
+
 /** Strip a leading "provider:" routing prefix before sending upstream. */
 export function stripProviderPrefix(model: string): string {
   const colon = (model || "").indexOf(":");
