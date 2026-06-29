@@ -419,6 +419,7 @@ const PAGE = String.raw`<!doctype html>
             <span id="keylist-checkall-out" class="hint" style="margin:0 10px 0 0"></span>
             <button class="btn ghost small" id="keylist-toggle">显示禁用</button>
             <button class="btn primary small" id="keylist-checkall">检测全部</button>
+            <button class="btn ghost small" id="keylist-prune">清理失效</button>
             <button class="btn ghost small" id="keylist-refresh">刷新</button>
           </h2>
           <table>
@@ -691,7 +692,14 @@ const PAGE = String.raw`<!doctype html>
   }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-  function fmtDate(ms){ if(!ms) return '–'; try{ return new Date(ms).toISOString().slice(0,16).replace('T',' '); }catch(e){ return '–'; } }
+  function pad2(n){ return (n<10?'0':'')+n; }
+  // local time (was UTC via toISOString — showed CST users a -8h skew)
+  function fmtDate(ms){ if(!ms) return '–'; try{ var d=new Date(ms); return pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+' '+pad2(d.getHours())+':'+pad2(d.getMinutes()); }catch(e){ return '–'; } }
+  function fmtNum(n){ try{ return (n==null?0:n).toLocaleString('en-US'); }catch(e){ return String(n==null?0:n); } }
+  // enum → 中文 (UI is Simplified Chinese; backend stores English enums)
+  var KIND_ZH={topup:'充值',charge:'消费',usage:'消费'};
+  var ROLE_CN={admin:'管理员',user:'用户'};
+  var STATUS_CN={pending:'待开通',approved:'已开通',blocked:'已停用'};
   function copy(text, el){
     var done=function(){ if(el){ var o=el.textContent; el.textContent='已复制'; setTimeout(function(){ el.textContent=o; },900); } };
     if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done,done); }
@@ -705,22 +713,26 @@ const PAGE = String.raw`<!doctype html>
   }
 
   // ---------------- models (shared) ----------------
+  var modelsErr=false; // distinguish a failed /v1/models fetch from a genuinely empty pool
   function loadModels(){
     return api('/v1/models').then(function(r){
+      if(!r.ok){ modelsErr=true; modelsCache=[]; return []; }
       var list = (r.body && (r.body.data || r.body)) || [];
       if(!Array.isArray(list)) list = [];
-      modelsCache = list;
+      modelsErr=false; modelsCache = list;
       return list;
-    }).catch(function(){ modelsCache=[]; return []; });
+    }).catch(function(){ modelsErr=true; modelsCache=[]; return []; });
   }
   function renderModelsInto(tbodyId){
     var tb=$(tbodyId); if(!tb) return;
     var list=modelsCache||[];
-    if(!list.length){ tb.innerHTML='<tr><td colspan="2" style="color:var(--faint)">暂无</td></tr>'; return; }
+    if(modelsErr){ tb.innerHTML='<tr><td colspan="2"><span class="e">加载失败</span> · <button class="btn ghost small" id="'+tbodyId+'-retry">重试</button></td></tr>'; var rb=$(tbodyId+'-retry'); if(rb) rb.onclick=function(){ loadModels().then(function(){ renderModelsInto(tbodyId); }); }; return; }
+    if(!list.length){ tb.innerHTML='<tr><td colspan="2" style="color:var(--faint)">暂无可用模型</td></tr>'; return; }
     tb.innerHTML = list.map(function(m){
       var d=MODEL_LABELS[m.id];
-      return '<tr><td style="font-weight:700" class="mono-token">'+esc(m.id)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td><td style="color:var(--muted)">'+esc(m.owned_by||m.ownedBy||'–')+'</td></tr>';
+      return '<tr><td style="font-weight:700" class="mono-token copyable" data-copy="'+esc(m.id)+'" title="点击复制">'+esc(m.id)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td><td style="color:var(--muted)">'+esc(m.owned_by||m.ownedBy||'–')+'</td></tr>';
     }).join('');
+    bindCopy(tb);
   }
 
   // ---------------- sidebar nav ----------------
@@ -783,7 +795,7 @@ const PAGE = String.raw`<!doctype html>
     if(id==='tokens') loadMyTokens();
     if(id==='overview') loadStats('ov');
     if(id==='keys'){ loadStats('keys'); loadModelStatus(); }
-    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; loadKeyList(); }
+    if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; var pr=$('keylist-prune'); if(pr) pr.onclick=function(){ if(!confirm('清理所有永久失效的 key?欠费的会保留')) return; pr.disabled=true; var out=$('keylist-checkall-out'); if(out) out.textContent='清理中…'; api('/admin/keys/prune',{method:'POST'}).then(function(r){ pr.disabled=false; if(out) out.textContent='已清理 '+((r.body&&r.body.removed)||0)+' 个失效 key'; loadKeyList(); }).catch(function(){ pr.disabled=false; if(out) out.textContent='清理出错'; }); }; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
     if(id==='usage') loadUserUsage();
@@ -804,6 +816,7 @@ const PAGE = String.raw`<!doctype html>
   // ---------------- chat playgrounds ----------------
   function renderChat(logId, msgs){
     var el=$(logId); if(!el) return;
+    if(!msgs.length){ el.innerHTML='<span style="color:var(--faint)">开始对话…</span>'; return; }
     el.innerHTML = msgs.map(function(m){
       var who = m.role==='user'?'你':(m.role==='assistant'?'AI':m.role);
       var col = m.role==='user'?'var(--blue)':'var(--green)';
@@ -821,7 +834,7 @@ const PAGE = String.raw`<!doctype html>
   }
   function bindEnter(inputId, sendFn){
     var el=$(inputId); if(!el||el.__b) return; el.__b=1;
-    el.addEventListener('keydown', function(ev){ if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); sendFn(); } });
+    el.addEventListener('keydown', function(ev){ if(ev.isComposing || ev.keyCode===229) return; if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); sendFn(); } });
   }
   // streaming chat: append an assistant bubble that fills in as SSE arrives.
   function streamChat(path, payload, logId, msgs, btn){
@@ -870,7 +883,15 @@ const PAGE = String.raw`<!doctype html>
   function modelLabel(id){ var d=MODEL_LABELS[id]; return d ? id+' — '+d : id; }
   function initChat(){
     loadModels().then(function(){
-      var sel=$('chat-model');
+      var sel=$('chat-model'); var b=$('chat-send'); var inp=$('chat-input');
+      var none=(modelsCache||[]).length===0;
+      if(none){
+        if(!chatMsgs.length) renderChat('chat-log', chatMsgs);
+        $('chat-log').innerHTML='<span style="color:var(--faint)">// '+(modelsErr?'模型列表加载失败,稍后再试':'暂无可用模型,稍后再试')+'</span>';
+        if(b) b.disabled=true; if(inp) inp.disabled=true;
+        return;
+      }
+      if(b) b.disabled=false; if(inp) inp.disabled=false;
       if(sel && !sel.options.length){
         var groups={};
         (modelsCache||[]).forEach(function(m){ (groups[m.owned_by]=groups[m.owned_by]||[]).push(m.id); });
@@ -885,7 +906,7 @@ const PAGE = String.raw`<!doctype html>
   }
   function sendChat(){
     var inp=$('chat-input'), txt=inp.value.trim(); if(!txt) return;
-    var model=$('chat-model').value;
+    var model=$('chat-model').value; if(!model) return;
     chatMsgs.push({role:'user',content:txt}); inp.value='';
     var btn=$('chat-send'); btn.disabled=true;
     streamChat('/v1/chat/completions', {model:model, messages:chatMsgs.slice()}, 'chat-log', chatMsgs, btn);
@@ -893,9 +914,16 @@ const PAGE = String.raw`<!doctype html>
   // admin debug chat (specific key, no billing)
   var dbgMsgs=[];
   function initDbgChat(){
+    var sel=$('dbg-key'); var prev=sel?sel.value:'';
     api('/admin/keys/list').then(function(r){
-      var keys=(r.body&&r.body.keys)||[]; var sel=$('dbg-key'); if(!sel) return;
+      if(!sel) return;
+      if(!r.ok){ $('dbg-log').innerHTML='<span style="color:var(--faint)">// 拉取 key 列表失败,稍后重试</span>'; return; }
+      var keys=(r.body&&r.body.keys)||[];
+      var b=$('dbg-send');
+      if(!keys.length){ $('dbg-log').innerHTML='<span style="color:var(--faint)">// 池子里还没有 key,先去「Key 池」添加</span>'; if(b) b.disabled=true; return; }
+      if(b) b.disabled=false;
       sel.innerHTML = keys.map(function(k){ return '<option value="'+k.id+'">#'+k.id+' · '+k.provider+' · '+esc(k.masked)+' ('+k.status+')</option>'; }).join('');
+      if(prev) sel.value=prev; // keep the operator's selection across section re-entry
     });
     var b=$('dbg-send'); if(b) b.onclick=sendDbg;
     var cl=$('dbg-clear'); if(cl) cl.onclick=function(){ dbgMsgs=[]; renderChat('dbg-log',dbgMsgs); };
@@ -903,7 +931,7 @@ const PAGE = String.raw`<!doctype html>
   }
   function sendDbg(){
     var inp=$('dbg-input'), txt=inp.value.trim(); if(!txt) return;
-    var id=$('dbg-key').value; if(!id){ alert('先选一个 key'); return; }
+    var id=$('dbg-key').value; if(!id){ $('dbg-log').innerHTML='<span style="color:var(--faint)">先在上方选一个 key</span>'; return; }
     var model=$('dbg-model').value.trim();
     dbgMsgs.push({role:'user',content:txt}); inp.value='';
     var btn=$('dbg-send'); btn.disabled=true;
@@ -914,20 +942,20 @@ const PAGE = String.raw`<!doctype html>
   // ---------------- usage / logs (shared renderers) ----------------
   function pct(ok,n){ return n>0 ? Math.round(ok/n*100)+'%' : '–'; }
   function renderUsage(d, p){
-    $(p+'-total').textContent = d.total||0;
+    $(p+'-total').textContent = fmtNum(d.total||0);
     $(p+'-rate').textContent = pct(d.ok||0, d.total||0);
-    $(p+'-tokens').textContent = d.tokens||0;
+    $(p+'-tokens').textContent = fmtNum(d.tokens||0);
     var rows=(d.byProvider||[]).map(function(x){
-      return '<tr><td style="font-weight:700">'+esc(x.provider)+'</td><td class="n">'+x.n+'</td>'
-        +'<td class="n">'+x.ok+'</td><td class="n">'+Math.round(x.avg_latency||0)+'ms</td>'
-        +'<td class="n">'+(x.tokens||0)+'</td></tr>';
+      return '<tr><td style="font-weight:700">'+esc(x.provider)+'</td><td class="n">'+fmtNum(x.n)+'</td>'
+        +'<td class="n">'+fmtNum(x.ok)+'</td><td class="n">'+Math.round(x.avg_latency||0)+'ms</td>'
+        +'<td class="n">'+fmtNum(x.tokens||0)+'</td></tr>';
     }).join('');
     $(p+'-byprov').innerHTML = rows || '<tr><td colspan="5" style="color:var(--faint)">暂无</td></tr>';
   }
   function renderRecent(rows, tbodyId, showOwner){
     var cols = showOwner ? 7 : 6;
     var html=(rows||[]).map(function(r){
-      var t=new Date(r.created_at).toISOString().slice(5,16).replace('T',' ');
+      var t=fmtDate(r.created_at);
       var okc=r.ok?'var(--green)':'var(--red)';
       var owner='';
       if(showOwner){
@@ -939,7 +967,7 @@ const PAGE = String.raw`<!doctype html>
       return '<tr><td style="color:var(--faint)">'+t+'</td>'+owner+'<td>'+esc(r.provider)+'</td>'
         +'<td>'+esc(r.model||'–')+'</td><td style="color:'+okc+'">'+(r.status_code==null?'–':r.status_code)+'</td>'
         +'<td class="n">'+(r.latency_ms==null?'–':r.latency_ms+'ms')+'</td>'
-        +'<td class="n">'+(r.total_tokens==null?'–':r.total_tokens)+'</td></tr>';
+        +'<td class="n">'+(r.total_tokens==null?'–':fmtNum(r.total_tokens))+'</td></tr>';
     }).join('');
     $(tbodyId).innerHTML = html || '<tr><td colspan="'+cols+'" style="color:var(--faint)">暂无</td></tr>';
   }
@@ -974,8 +1002,18 @@ const PAGE = String.raw`<!doctype html>
       +bars+'</svg>';
   }
   function loadUserUsage(){
-    api('/me/usage').then(function(r){ if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); } });
-    api('/me/logs').then(function(r){ if(r.ok) renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); });
+    ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='…'; });
+    api('/me/usage').then(function(r){
+      if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); return; }
+      ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='–'; });
+      $('u-byprov').innerHTML='<tr><td colspan="5"><span class="e">加载失败</span> · <button class="btn ghost small" id="u-usage-retry">重试</button></td></tr>';
+      var rb=$('u-usage-retry'); if(rb) rb.onclick=loadUserUsage;
+    }).catch(function(){ ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); });
+    api('/me/logs').then(function(r){
+      if(r.ok){ renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); return; }
+      $('u-recent').innerHTML='<tr><td colspan="6" style="color:var(--red)">加载失败,点此重试</td></tr>';
+      var c=$('u-recent').querySelector('td'); if(c) c.onclick=loadUserUsage;
+    });
   }
   // admin logs view state: owner filter (owner_sub, '' = all) + zero-based page.
   var logsOwner='';
@@ -1048,8 +1086,8 @@ const PAGE = String.raw`<!doctype html>
     var amtc=(t.kind==='topup')?'var(--green)':'var(--red)';
     var sign=(t.kind==='topup')?'+':'-';
     var cells='<td style="color:var(--faint)">'+esc(time)+'</td>';
-    if(withSub) cells+='<td style="font-family:ui-monospace,monospace;font-size:12px">'+esc(String(t.sub||'').slice(0,12))+'</td>';
-    cells+='<td>'+esc(t.kind)+'</td>'
+    if(withSub) cells+='<td style="font-family:ui-monospace,monospace;font-size:12px" title="'+esc(String(t.sub||''))+'">'+esc(String(t.sub||'').slice(0,12))+'</td>';
+    cells+='<td>'+esc(KIND_ZH[t.kind]||t.kind)+'</td>'
       +'<td class="n" style="color:'+amtc+'">'+sign+usd(Math.abs(t.amount_micro))+'</td>'
       +'<td class="n">'+usd(t.balance_after_micro)+'</td>'
       +'<td>'+esc(t.model||'–')+'</td>'
@@ -1158,7 +1196,7 @@ const PAGE = String.raw`<!doctype html>
     var btn=$('bal-topup-btn'); btn.disabled=true;
     api('/me/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({amount_usd:amount})})
     .then(function(r){ btn.disabled=false;
-      if(r.status===503){ alert('支付未配置'); o.innerHTML='<span class="e">支付未配置</span>'; return; }
+      if(r.status===503){ o.innerHTML='<span class="e">支付未配置</span>'; return; }
       if(r.ok && r.body && r.body.url){ location.href=r.body.url; return; }
       var msg=(r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status); o.innerHTML='<span class="e">'+esc(msg)+'</span>';
     }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
@@ -1168,8 +1206,11 @@ const PAGE = String.raw`<!doctype html>
   function loadBalance(){
     if(/[?&]topup=success(?:&|$)/.test(location.search)){ var h=$('bal-topup-success'); if(h) h.style.display='block'; }
     api('/me/balance').then(function(r){
-      var bal=(r.ok && r.body && r.body.balance_micro!=null) ? r.body.balance_micro : 0;
+      // distinguish a failed read from a genuine zero balance — never show fake 0.0000
+      if(!(r.ok && r.body && r.body.balance_micro!=null)){ $('bal-usd').innerHTML='<span class="e">读取失败</span>'; return; }
+      var bal=r.body.balance_micro;
       $('bal-usd').textContent = usd(bal);
+      $('bal-usd').style.color = bal<=0 ? 'var(--red)' : '';
     }).catch(function(){ $('bal-usd').textContent='–'; });
     var tb=$('bal-txns-body');
     api('/me/transactions').then(function(r){
@@ -1214,6 +1255,7 @@ const PAGE = String.raw`<!doctype html>
                : 'd-active';
         var reason = (k.status==='disabled' && k.disabled_reason) ? k.disabled_reason : k.last_error;
         var err = reason ? esc(String(reason).slice(0,60)) : '';
+        var sLabel = sd==='d-disabled'?'已禁用':sd==='d-cooldown'?'冷却中':sd==='d-warn'?'异常(仍在用)':'可用';
         var toggle = (k.status==='active')
           ? '<button class="btn ghost small kl-disable">禁用</button>'
           : '<button class="btn ghost small kl-enable">启用</button>';
@@ -1223,10 +1265,10 @@ const PAGE = String.raw`<!doctype html>
           ? ' <span class="badge" style="background:var(--cream);border-color:#cfcbbd;color:var(--faint);font-size:9.5px;padding:0 6px" title="project '+esc(String(k.project_id))+'">proj …'+esc(String(k.project_id).slice(-4))+'</span>'
           : '';
         return '<tr data-id="'+k.id+'">'
-          +'<td><span class="dot '+sd+'"></span>'+esc(k.provider)+proj+'</td>'
+          +'<td><span class="dot '+sd+'" title="'+sLabel+'"></span>'+esc(k.provider)+proj+'</td>'
           +'<td style="font-family:ui-monospace,monospace;font-size:12.5px">'+esc(k.masked)+'</td>'
           +'<td class="n">'+k.total_requests+' / '+k.total_fails+'</td>'
-          +'<td style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis">'+err+'</td>'
+          +'<td style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis"'+(reason?' title="'+esc(String(reason))+'"':'')+'>'+err+'</td>'
           +'<td class="kl-result" style="font-size:12.5px;white-space:nowrap"></td>'
           +'<td style="color:var(--faint);font-size:12px;white-space:nowrap" title="'+(k.created_at?esc(new Date(k.created_at).toLocaleString()):'')+'">'+(k.created_at?fmtDate(k.created_at):'–')+'</td>'
           +'<td style="white-space:nowrap"><button class="btn ghost small kl-check">测活</button> '+toggle+' <button class="btn ghost small kl-del">删</button></td>'
@@ -1252,6 +1294,9 @@ const PAGE = String.raw`<!doctype html>
         var dis=tr.querySelector('.kl-disable'); if(dis) dis.onclick=function(){ api('/admin/keys/'+id+'/disable',{method:'POST'}).then(loadKeyList); };
         var del=tr.querySelector('.kl-del'); if(del) del.onclick=function(){ if(confirm('删除这个 key?不可恢复')) api('/admin/keys/'+id,{method:'DELETE'}).then(loadKeyList); };
       });
+    }).catch(function(){
+      tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">加载失败 · <button class="btn ghost small" id="keylist-retry">重试</button></td></tr>';
+      var rb=$('keylist-retry'); if(rb) rb.onclick=loadKeyList;
     });
   }
 
@@ -1295,15 +1340,17 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- consumer: my tokens ----------------
   function loadMyTokens(){
+    var tb=$('my-token-list');
+    if(tb) tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr>';
     return api('/me/tokens').then(function(r){
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">加载失败 · '+esc((r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status))+' <button class="btn ghost small" id="my-tokens-retry">重试</button></td></tr>'; var rb=$('my-tokens-retry'); if(rb) rb.onclick=loadMyTokens; return; }
       var list = Array.isArray(r.body)? r.body : [];
-      var tb=$('my-token-list');
       if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">还没有令牌</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         return '<tr><td>'+t.id+'</td>'
           + '<td style="font-weight:700">'+esc(t.name||'–')+'</td>'
           + '<td><span class="mono-token copyable" data-copy="'+esc(t.token)+'">'+esc(t.token)+'</span></td>'
-          + '<td>'+(t.enabled?'是':'否')+'</td>'
+          + '<td><span class="dot '+(t.enabled?'d-active':'d-disabled')+'"></span>'+(t.enabled?'启用':'停用')+'</td>'
           + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
           + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td>'
           + '<td><button class="btn ghost small" data-del="'+t.id+'">删除</button></td></tr>';
@@ -1313,10 +1360,10 @@ const PAGE = String.raw`<!doctype html>
         b.onclick = function(){
           if(!confirm('删除该令牌？此操作不可撤销。')) return;
           b.disabled=true;
-          api('/me/tokens/'+b.getAttribute('data-del'),{method:'DELETE'}).then(function(){ loadMyTokens(); });
+          api('/me/tokens/'+b.getAttribute('data-del'),{method:'DELETE'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadMyTokens(); }).catch(function(){ b.disabled=false; });
         };
       });
-    });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">网络错误</td></tr>'; });
   }
   function mintMy(){
     var name=$('my-tname').value.trim();
@@ -1379,29 +1426,38 @@ const PAGE = String.raw`<!doctype html>
   }
   function loadStats(prefix){
     var tbodyId = prefix==='ov' ? 'ov-byprovider' : 'keys-byprovider';
+    if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr>';
+    function errTiles(){ ['t-active','t-cooldown','t-disabled'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); }
     return api('/admin/keys').then(function(r){
-      if(!r.ok){ if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" class="e">错误 '+r.status+'</td></tr>'; return; }
+      if(!r.ok){ if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" class="e">错误 '+r.status+'</td></tr>'; errTiles(); return; }
       renderStats(r.body, tbodyId);
-    });
+    }).catch(function(){ if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" class="e">网络错误</td></tr>'; errTiles(); });
   }
   function probe(){
     var btn=$('ov-probe'); btn.disabled=true; var o=$('ov-probe-out'); o.style.display='block'; o.textContent='巡检中…';
     api('/admin/probe',{method:'POST'}).then(function(r){ btn.disabled=false;
       if(!r.ok){ o.innerHTML='<span class="e">错误 '+r.status+'</span>'; return; }
-      o.innerHTML='<span class="k">巡检完成</span> '+esc(JSON.stringify(r.body||{}));
+      var b=r.body||{};
+      // format the typed fields into Chinese instead of dumping raw English JSON
+      if(b.revived!=null || b.probed!=null || b.reactivated!=null)
+        o.innerHTML='<span class="k">巡检完成</span> 唤醒冷却 '+(b.revived||0)+' · 探测禁用 '+(b.probed||0)+' · 复活 '+(b.reactivated||0);
+      else o.innerHTML='<span class="k">巡检完成</span> '+esc(JSON.stringify(b));
       loadStats('ov');
     }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
   }
   function importKeys(){
     var keys=$('keys').value; if(!keys.trim()) return;
-    var btn=$('importBtn'); btn.disabled=true;
+    var btn=$('importBtn'); btn.disabled=true; var o=$('importOut'); o.style.display='block'; o.textContent='导入中…(坏 key 会即时试调)';
     api('/admin/keys/import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({keys:keys})})
-    .then(function(r){ btn.disabled=false; var o=$('importOut'); o.style.display='block';
-      if(!r.ok){ o.innerHTML='<span class="e">错误 '+r.status+'</span> '+esc(JSON.stringify(r.body)); return; }
+    .then(function(r){ btn.disabled=false;
+      if(!r.ok){ o.innerHTML='<span class="e">'+esc((r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status))+'</span>'; return; }
       var b=r.body||{}, by=b.byProvider?Object.keys(b.byProvider).map(function(k){return k+'='+b.byProvider[k];}).join('  '):'';
-      o.innerHTML='<span class="k">新增 '+b.added+'</span>  重复 '+b.duplicate+'  跳过 '+((b.skipped&&b.skipped.length)||0)+'\n'+esc(by);
+      var skipN=(b.skipped&&b.skipped.length)||0;
+      var html='<span class="k">新增 '+b.added+'</span>  重复 '+b.duplicate+'  跳过 '+skipN+'\n'+esc(by);
+      if(skipN && Array.isArray(b.skipped)) html+='\n<span class="e">以下行已跳过(检查 provider 前缀):</span>\n'+b.skipped.map(function(s){return esc(String(s).slice(0,40));}).join('\n');
+      o.innerHTML=html;
       $('keys').value=''; loadStats('keys'); loadStats('ov');
-    }).catch(function(){ btn.disabled=false; });
+    }).catch(function(){ btn.disabled=false; o.innerHTML='<span class="e">网络错误</span>'; });
   }
 
   // ---------------- admin: model availability ----------------
@@ -1429,48 +1485,57 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- admin: users ----------------
   function loadUsers(){
+    var tb=$('users-body');
+    if(tb) tb.innerHTML='<tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/users').then(function(r){
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">加载失败 ('+r.status+') · <button class="btn ghost small" id="users-retry">重试</button></td></tr>'; var rb=$('users-retry'); if(rb) rb.onclick=loadUsers; return; }
       var list = Array.isArray(r.body)? r.body : [];
-      var tb=$('users-body');
       if(!list.length){ tb.innerHTML='<tr><td colspan="5" style="color:var(--faint)">还没有用户</td></tr>'; return; }
       tb.innerHTML = list.map(function(u){
         var bcls = u.status==='approved'?'b-approved':(u.status==='blocked'?'b-blocked':'b-pending');
         var action='';
-        if(u.status==='approved') action='<button class="btn ghost small" data-block="'+u.id+'">停用</button>';
+        // never offer 停用 on an admin row — would let an admin lock themselves out.
+        if(u.role==='admin') action='<span class="hint">管理员</span>';
+        else if(u.status==='approved') action='<button class="btn ghost small" data-block="'+u.id+'">停用</button>';
+        else if(u.status==='blocked') action='<button class="btn primary small" data-approve="'+u.id+'" data-was-blocked="1">恢复</button>';
         else action='<button class="btn primary small" data-approve="'+u.id+'">开通</button>';
         var hot = u.status==='pending' ? ' class="hot"' : '';
-        return '<tr'+hot+'><td style="font-weight:700; word-break:break-all">'+esc(u.email||'–')+'</td>'
-          + '<td>'+esc(u.role)+'</td>'
-          + '<td><span class="badge '+bcls+'">'+esc(u.status)+'</span></td>'
+        return '<tr'+hot+'><td style="font-weight:700; word-break:break-all">'+esc(u.email||u.name||u.sub||'–')+'</td>'
+          + '<td>'+esc(ROLE_CN[u.role]||u.role)+'</td>'
+          + '<td><span class="badge '+bcls+'"'+(u.approved_at?' title="开通于 '+esc(fmtDate(u.approved_at))+'"':'')+'>'+esc(STATUS_CN[u.status]||u.status)+'</span></td>'
           + '<td style="color:var(--faint)">'+fmtDate(u.created_at)+'</td>'
           + '<td>'+action+'</td></tr>';
       }).join('');
       Array.prototype.forEach.call(tb.querySelectorAll('[data-approve]'), function(b){
-        b.onclick=function(){ b.disabled=true; api('/admin/users/'+b.getAttribute('data-approve')+'/approve',{method:'POST'}).then(function(){ loadUsers(); }); };
+        b.onclick=function(){
+          if(b.getAttribute('data-was-blocked') && !confirm('恢复该用户？其令牌仍为停用状态,需另行启用。')) return;
+          b.disabled=true; api('/admin/users/'+b.getAttribute('data-approve')+'/approve',{method:'POST'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadUsers(); }).catch(function(){ b.disabled=false; }); };
       });
       Array.prototype.forEach.call(tb.querySelectorAll('[data-block]'), function(b){
         b.onclick=function(){ if(!confirm('停用该用户？其令牌会一并禁用。')) return; b.disabled=true;
-          api('/admin/users/'+b.getAttribute('data-block')+'/block',{method:'POST'}).then(function(){ loadUsers(); }); };
+          api('/admin/users/'+b.getAttribute('data-block')+'/block',{method:'POST'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadUsers(); }).catch(function(){ b.disabled=false; }); };
       });
-    });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">网络错误</td></tr>'; });
   }
 
   // ---------------- admin: tokens ----------------
   function loadAdminTokens(){
+    var tb=$('adm-token-list');
+    if(tb) tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/tokens').then(function(r){
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="8"><span class="e">错误 '+r.status+'</span></td></tr>'; return; }
       var list = Array.isArray(r.body)? r.body : [];
-      var tb=$('adm-token-list');
       if(!list.length){ tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">还没有</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         return '<tr><td>'+t.id+'</td><td style="font-weight:700">'+esc(t.name||'–')+'</td>'
-          + '<td>'+esc(t.role)+'</td>'
+          + '<td><span class="badge">'+esc(ROLE_CN[t.role]||t.role)+'</span></td>'
           + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
           + '<td class="n">'+(t.rpm_limit==null?'∞':t.rpm_limit)+'</td>'
           + '<td style="color:var(--faint)">'+(t.expires_at==null?'永久':fmtDate(t.expires_at))+'</td>'
-          + '<td>'+(t.enabled?'是':'否')+'</td>'
+          + '<td><span class="dot '+(t.enabled?'d-active':'d-disabled')+'"></span>'+(t.enabled?'启用':'停用')+'</td>'
           + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td></tr>';
       }).join('');
-    });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="8"><span class="e">网络错误</span></td></tr>'; });
   }
   function mintAdmin(){
     var name=$('adm-tname').value.trim();
