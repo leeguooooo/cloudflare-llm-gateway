@@ -17,8 +17,14 @@ import { upsertUser, getUserBySub, topUpMicro } from "./db";
 const DEFAULT_ISSUER = ""; // set OIDC_ISSUER; empty => SSO disabled
 const SESSION_COOKIE = "kp_session";
 const PKCE_COOKIE = "kp_oidc";
+// One-shot marker so a missing/expired PKCE cookie restarts login exactly once
+// instead of either dead-ending or looping forever.
+const RETRY_COOKIE = "kp_oidc_retry";
 const SESSION_TTL = 60 * 60 * 24 * 7; // 7 days
-const PKCE_TTL = 60 * 10; // 10 minutes
+// The PKCE/state cookie has to outlive the whole round-trip, which on the SSO
+// includes registering + signing in on a mobile / in-app browser. 10 min was
+// too tight and produced "invalid state" dead-ends; give it real headroom.
+const PKCE_TTL = 60 * 30; // 30 minutes
 
 export interface Session {
   sub: string;
@@ -132,6 +138,12 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
+/** Friendly fallback shown only when a restarted login still has no PKCE cookie
+ *  (cookies blocked). Offers a manual retry instead of a bare "invalid state". */
+function invalidStatePage(): string {
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>登录已过期</title><style>:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#fcfbf4;color:#1a1a1a;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;padding:24px}main{max-width:360px;text-align:center}h1{font-size:20px;margin:0 0 12px}p{color:#555;line-height:1.6;margin:0 0 24px}a{display:inline-block;background:#1a1a1a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:999px;font-weight:600}small{display:block;margin-top:16px;color:#999}</style></head><body><main><h1>登录会话已过期</h1><p>登录耗时过长或浏览器拦截了 Cookie，请重新登录一次。</p><a href="/auth/login">重新登录</a><small>若反复出现，请在系统浏览器（Safari / Chrome）中打开，或允许本站 Cookie。</small></main></body></html>`;
+}
+
 // ---------- config ----------
 
 function issuer(env: Env): string {
@@ -209,8 +221,23 @@ app.get("/callback", async (c) => {
   const pkceTok = readCookie(c.req.raw, PKCE_COOKIE);
   const pkce = pkceTok ? await jwtVerify(pkceTok, secret) : null;
   if (!pkce || pkce.s !== state || typeof pkce.v !== "string") {
-    return c.text("invalid state", 400);
+    // The PKCE/state cookie is missing, expired, or mismatched — in practice
+    // because the login round-trip outlived the cookie or it didn't survive the
+    // hop through the IdP (common on mobile / in-app browsers). Don't dead-end
+    // on a cryptic "invalid state": restart the flow once. By the retry the user
+    // already has an IdP session, so the second pass is instant and lands a
+    // fresh cookie. The one-shot marker stops an infinite loop if cookies truly
+    // can't be stored (the browser also caps redirect loops as a backstop).
+    const alreadyRetried = readCookie(c.req.raw, RETRY_COOKIE) === "1";
+    if (!alreadyRetried) {
+      c.header("Set-Cookie", cookie(RETRY_COOKIE, "1", 120, true), { append: true });
+      return c.redirect("/auth/login");
+    }
+    c.header("Set-Cookie", cookie(RETRY_COOKIE, "", 0, true), { append: true });
+    return c.html(invalidStatePage(), 400);
   }
+  // Good state — drop any leftover retry marker so the next login starts clean.
+  c.header("Set-Cookie", cookie(RETRY_COOKIE, "", 0, true), { append: true });
 
   // Exchange the code (public client + PKCE, no secret).
   const body = new URLSearchParams({
