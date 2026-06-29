@@ -173,6 +173,9 @@ const PAGE = String.raw`<!doctype html>
   }
 </style>
 <script defer src="https://blog.leeguoo.com/scripts/visitor-beacon.js?v=20260629-2"></script>
+<!-- Google Analytics 4 — shared leeguoo property (542876134); segment by hostname. -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-RCV0Z432Y8"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-RCV0Z432Y8');</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
