@@ -302,7 +302,9 @@ const PAGE = String.raw`<!doctype html>
       <section class="section" id="sec-models">
         <h2 class="sec-h">模型</h2>
         <p class="sec-sub">// 当前可路由的模型</p>
+        <p class="hint" style="margin-top:0">仅展示当前有可用 key、且未被标记下线的模型;不可用会自动移除</p>
         <div class="card r1">
+          <h2 class="h-green"><span class="hd"></span>可用模型<span style="flex:1"></span><span class="hint" id="models-updated" style="margin:0"></span><button class="btn ghost small" id="models-refresh">刷新</button></h2>
           <table>
             <thead><tr><th>模型 id</th><th>来源</th></tr></thead>
             <tbody id="models-body"><tr><td colspan="2" style="color:var(--faint)">加载中…</td></tr></tbody>
@@ -442,6 +444,7 @@ const PAGE = String.raw`<!doctype html>
             <thead><tr><th>供应商</th><th>可用</th><th>冷却</th><th>禁用</th></tr></thead>
             <tbody id="keys-byprovider"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
+          <div class="hint" style="margin-top:10px">需要逐个查看？<button class="btn ghost small" id="keys-tokeylist">逐个 key 管理 →</button></div>
         </div>
         <div class="card r2">
           <h2 class="h-red"><span class="hd"></span>模型可用性
@@ -547,9 +550,12 @@ const PAGE = String.raw`<!doctype html>
         <div class="card r1">
           <div class="row" style="margin-bottom:10px">
             <div style="flex:2"><label>选 key</label><select id="dbg-key"></select></div>
-            <div><label>模型(留空=默认)</label><input id="dbg-model" placeholder="默认" autocomplete="off" /></div>
+            <div><label>模型(留空=默认)</label><select id="dbg-model"></select></div>
+            <div style="max-width:108px"><label>max_tokens</label><input id="dbg-maxtok" type="number" min="1" placeholder="256" autocomplete="off" /></div>
             <button class="btn ghost small" id="dbg-clear">清空</button>
           </div>
+          <span class="hint" style="display:block;margin:0 0 8px">调试回复默认截断在 256 token</span>
+          <div id="dbg-health" class="hint" style="display:none;margin:0 0 8px"></div>
           <div id="dbg-log" style="min-height:180px; max-height:420px; overflow:auto; border:2px dashed #cfcbbd; border-radius:12px; padding:12px; background:var(--cream)"><span style="color:var(--faint)">选一个 key,直连试聊…</span></div>
           <div class="row" style="margin-top:12px; align-items:stretch">
             <div><textarea id="dbg-input" style="min-height:56px" placeholder="测试这个 key…"></textarea></div>
@@ -575,7 +581,10 @@ const PAGE = String.raw`<!doctype html>
           <div id="u-chart"></div>
         </div>
         <div class="card r1" style="margin-top:14px">
-          <h2 class="h-green"><span class="hd"></span>按供应商</h2>
+          <h2 class="h-green"><span class="hd"></span>按供应商
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="usage-refresh">刷新</button>
+          </h2>
           <table><thead><tr><th>供应商</th><th>请求</th><th>成功</th><th>平均延迟</th><th>token</th></tr></thead>
           <tbody id="u-byprov"><tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr></tbody></table>
         </div>
@@ -663,6 +672,7 @@ const PAGE = String.raw`<!doctype html>
         </div>
         <div class="card r2">
           <h2 class="h-blue"><span class="hd"></span>最近流水
+            <span class="hint" style="margin-left:8px;font-weight:400">最多展示最近 100 条</span>
             <span style="flex:1"></span>
             <button class="btn ghost small" id="bill-txns-refresh">刷新</button>
           </h2>
@@ -708,7 +718,7 @@ const PAGE = String.raw`<!doctype html>
           <h2 class="h-green"><span class="hd"></span>充值</h2>
           <div class="hint" id="bal-topup-success" style="display:none; color:var(--green); margin-top:0">充值处理中，到账后余额会自动更新（可稍后点「刷新」）。</div>
           <div class="row">
-            <div><label>金额(USD)</label><input id="bal-topup-amount" type="number" step="0.01" min="0" placeholder="例如 10" /></div>
+            <div><label>金额(USD)</label><input id="bal-topup-amount" type="number" step="0.01" min="0" placeholder="例如 10" /><div id="bal-topup-chips" style="display:flex; gap:6px; margin-top:6px"><button class="btn ghost small" data-amt="5">5</button><button class="btn ghost small" data-amt="10">10</button><button class="btn ghost small" data-amt="20">20</button><button class="btn ghost small" data-amt="50">50</button></div></div>
             <button class="btn primary" id="bal-topup-btn">充值</button>
           </div>
           <div class="out" id="bal-topup-out" style="display:none"></div>
@@ -769,12 +779,15 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- models (shared) ----------------
   var modelsErr=false; // distinguish a failed /v1/models fetch from a genuinely empty pool
+  var modelsFetchedAt=0; // ms of last successful /v1/models fetch (drives the 更新于 hint)
+  // owned_by id → 显示名 (fallback to the raw id)
+  var PROVIDER_ZH={gemini:'Google Gemini',openai:'OpenAI',deepseek:'DeepSeek',qwen:'通义千问',glm:'智谱GLM',moonshot:'Kimi',mistral:'Mistral',groq:'Groq',openrouter:'OpenRouter'};
   function loadModels(){
     return api('/v1/models').then(function(r){
       if(!r.ok){ modelsErr=true; modelsCache=[]; return []; }
       var list = (r.body && (r.body.data || r.body)) || [];
       if(!Array.isArray(list)) list = [];
-      modelsErr=false; modelsCache = list;
+      modelsErr=false; modelsCache = list; modelsFetchedAt = Date.now();
       return list;
     }).catch(function(){ modelsErr=true; modelsCache=[]; return []; });
   }
@@ -785,7 +798,9 @@ const PAGE = String.raw`<!doctype html>
     if(!list.length){ tb.innerHTML='<tr><td colspan="2" style="color:var(--faint)">暂无可用模型</td></tr>'; return; }
     tb.innerHTML = list.map(function(m){
       var d=MODEL_LABELS[m.id];
-      return '<tr><td style="font-weight:700" class="mono-token copyable" data-copy="'+esc(m.id)+'" title="点击复制">'+esc(m.id)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td><td style="color:var(--muted)">'+esc(m.owned_by||m.ownedBy||'–')+'</td></tr>';
+      var ob=String(m.owned_by||m.ownedBy||'').toLowerCase();
+      var src=ob?'<span class="badge">'+esc(PROVIDER_ZH[ob]||m.owned_by||m.ownedBy)+'</span>':'<span style="color:var(--faint)">–</span>';
+      return '<tr><td style="font-weight:700" class="mono-token copyable" data-copy="'+esc(m.id)+'" title="点击复制">'+esc(m.id)+(d?'<span style="font-weight:400;color:var(--faint)"> — '+esc(d)+'</span>':'')+'</td><td>'+src+'</td></tr>';
     }).join('');
     bindCopy(tb);
   }
@@ -844,7 +859,8 @@ const PAGE = String.raw`<!doctype html>
   });
   function onSectionEnter(id){
     if(id==='models' || id==='docs'){
-      loadModels().then(function(){ renderModelsInto('models-body'); renderModelsInto('docs-models-body'); fillDocs(); });
+      loadModels().then(function(){ renderModelsInto('models-body'); renderModelsInto('docs-models-body'); fillDocs(); var mu=$('models-updated'); if(mu) mu.textContent=modelsFetchedAt?'更新于 '+fmtDate(modelsFetchedAt):''; });
+      var mrf=$('models-refresh'); if(mrf) mrf.onclick=function(){ mrf.disabled=true; loadModels().then(function(){ renderModelsInto('models-body'); var mu=$('models-updated'); if(mu) mu.textContent=modelsFetchedAt?'更新于 '+fmtDate(modelsFetchedAt):''; mrf.disabled=false; }); };
     }
     if(id==='dashboard') loadModels().then(loadDashboard);
     if(id==='tokens'){ var mo=$('my-mint-out'); if(mo){ mo.style.display='none'; mo.innerHTML=''; } loadMyTokens(); }
@@ -853,7 +869,7 @@ const PAGE = String.raw`<!doctype html>
     if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; var pr=$('keylist-prune'); if(pr) pr.onclick=function(){ if(!confirm('清理所有永久失效的 key?欠费的会保留')) return; pr.disabled=true; var out=$('keylist-checkall-out'); if(out) out.textContent='清理中…'; api('/admin/keys/prune',{method:'POST'}).then(function(r){ pr.disabled=false; if(out) out.textContent='已清理 '+((r.body&&r.body.removed)||0)+' 个失效 key'; loadKeyList(); }).catch(function(){ pr.disabled=false; if(out) out.textContent='清理出错'; }); }; loadKeyList(); }
     if(id==='users') loadUsers();
     if(id==='admintokens') loadAdminTokens();
-    if(id==='usage') loadUserUsage();
+    if(id==='usage'){ var ur=$('usage-refresh'); if(ur) ur.onclick=loadUserUsage; loadUserUsage(); }
     if(id==='logs'){
       var lr=$('logs-refresh'); if(lr) lr.onclick=loadAdminUsage;
       var rr=$('rank-refresh'); if(rr) rr.onclick=loadAdminRank;
@@ -993,30 +1009,60 @@ const PAGE = String.raw`<!doctype html>
     streamChat('/v1/chat/completions', {model:model, messages:chatMsgs.slice()}, 'chat-log', chatMsgs, btn);
   }
   // admin debug chat (specific key, no billing)
-  var dbgMsgs=[];
+  var dbgMsgs=[]; var dbgKeys=[]; // cache full key rows so key→provider + health are known
   function initDbgChat(){
     var sel=$('dbg-key'); var prev=sel?sel.value:'';
-    api('/admin/keys/list').then(function(r){
+    loadModels().then(function(){ return api('/admin/keys/list'); }).then(function(r){
       if(!sel) return;
       if(!r.ok){ $('dbg-log').innerHTML='<span style="color:var(--faint)">// 拉取 key 列表失败,稍后重试</span>'; return; }
       var keys=(r.body&&r.body.keys)||[];
       var b=$('dbg-send');
       if(!keys.length){ $('dbg-log').innerHTML='<span style="color:var(--faint)">// 池子里还没有 key,先去「Key 池」添加</span>'; if(b) b.disabled=true; return; }
       if(b) b.disabled=false;
+      dbgKeys=keys; // cache full rows so key→provider + health strip work without a re-fetch
       sel.innerHTML = keys.map(function(k){ return '<option value="'+k.id+'">#'+k.id+' · '+k.provider+' · '+esc(k.masked)+' ('+k.status+')</option>'; }).join('');
       if(prev) sel.value=prev; // keep the operator's selection across section re-entry
+      sel.onchange=onDbgKeyChange;
+      onDbgKeyChange(); // fill the model picker + health strip for the current key
     });
     var b=$('dbg-send'); if(b) b.onclick=sendDbg;
     var cl=$('dbg-clear'); if(cl) cl.onclick=function(){ dbgMsgs=[]; renderChat('dbg-log',dbgMsgs); };
     bindEnter('dbg-input', sendDbg);
   }
+  function dbgKeyById(id){ for(var i=0;i<dbgKeys.length;i++){ if(String(dbgKeys[i].id)===String(id)) return dbgKeys[i]; } return null; }
+  function onDbgKeyChange(){
+    var k=dbgKeyById($('dbg-key').value);
+    var ms=$('dbg-model');
+    if(ms){
+      // only offer models this key's provider can serve (owned_by === provider), plus '默认'
+      var opts=(modelsCache||[]).filter(function(m){ return k && (m.owned_by||m.ownedBy)===k.provider; });
+      ms.innerHTML='<option value="">默认</option>'+opts.map(function(m){ return '<option value="'+esc(m.id)+'">'+esc(modelLabel(m.id))+'</option>'; }).join('');
+    }
+    renderDbgHealth(k);
+  }
+  function renderDbgHealth(k){
+    var h=$('dbg-health'); if(!h) return;
+    if(!k){ h.style.display='none'; h.innerHTML=''; return; }
+    var sd = k.status==='disabled' ? 'd-disabled'
+           : k.status==='cooldown' ? 'd-cooldown'
+           : k.last_error ? 'd-warn'
+           : 'd-active';
+    var label = sd==='d-disabled'?'已禁用':sd==='d-cooldown'?'冷却中':sd==='d-warn'?'异常(仍在用)':'可用';
+    var reason = (k.status==='disabled' && k.disabled_reason) ? k.disabled_reason : k.last_error;
+    var bits='<span class="dot '+sd+'" style="margin-right:5px"></span>'+label;
+    if(reason) bits+=' · '+esc(String(reason).slice(0,80));
+    if(k.cooldown_until) bits+=' · 冷却至 '+esc(fmtDate(k.cooldown_until));
+    h.style.display=''; h.innerHTML=bits;
+  }
   function sendDbg(){
     var inp=$('dbg-input'), txt=inp.value.trim(); if(!txt) return;
     var id=$('dbg-key').value; if(!id){ $('dbg-log').innerHTML='<span style="color:var(--faint)">先在上方选一个 key</span>'; return; }
-    var model=$('dbg-model').value.trim();
+    var model=$('dbg-model').value;
+    var mt=parseInt(($('dbg-maxtok').value||'').trim(),10);
     dbgMsgs.push({role:'user',content:txt}); inp.value='';
     var btn=$('dbg-send'); btn.disabled=true;
     var payload={messages:dbgMsgs.slice()}; if(model) payload.model=model;
+    if(mt>0) payload.max_tokens=mt; // route defaults to 256 — let the operator raise the cap
     streamChat('/admin/keys/'+id+'/chat', payload, 'dbg-log', dbgMsgs, btn);
   }
 
@@ -1076,22 +1122,34 @@ const PAGE = String.raw`<!doctype html>
       g+='<text x="'+(x+bw/2)+'" y="'+(H-7)+'" text-anchor="middle" font-size="8.5" fill="var(--faint)" font-family="ui-monospace,monospace">'+esc(label)+'</text>';
       return g;
     }).join('');
+    var sumN=0, sumOk=0; days.forEach(function(d){ sumN+=(d.n||0); sumOk+=(d.ok||0); });
+    var aria='近 '+days.length+' 天共 '+sumN+' 次请求,成功 '+sumOk+' 次';
     // Fixed display height; width derives from the viewBox so a 2-day chart
     // stays small instead of being scaled up to fill the whole card.
-    el.innerHTML='<svg height="150" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMinYMid meet" style="max-width:100%;display:block">'
+    el.innerHTML='<svg role="img" aria-label="'+esc(aria)+'" height="150" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMinYMid meet" style="max-width:100%;display:block">'
       +'<line x1="5" y1="'+base+'" x2="'+(W-5)+'" y2="'+base+'" stroke="var(--ink)" stroke-width="1.5"/>'
       +bars+'</svg>';
   }
   function loadUserUsage(){
     ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='…'; });
+    // Onboarding CTA fires only when we positively know both usage total and
+    // logs are empty (0/0). On any API failure these stay null, so the error
+    // states below are never masked by a fake empty state.
+    var uTotal=null, uLogs=null;
+    function maybeOnboard(){
+      if(uTotal!==0 || uLogs!==0) return;
+      $('u-byprov').innerHTML='<tr><td colspan="5" style="color:var(--muted);padding:16px 10px;line-height:1.7">还没有调用记录 · 先到「令牌」创建一个令牌并发起第一次请求<br>'
+        +'<button class="btn ghost small" id="u-onboard-go" style="margin-top:8px">去创建令牌</button></td></tr>';
+      var go=$('u-onboard-go'); if(go) go.onclick=function(){ selectSection('tokens'); };
+    }
     api('/me/usage').then(function(r){
-      if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); return; }
+      if(r.ok){ renderUsage(r.body,'u'); renderDayChart('u-chart', r.body&&r.body.byDay); uTotal=(r.body&&r.body.total)||0; maybeOnboard(); return; }
       ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='–'; });
       $('u-byprov').innerHTML='<tr><td colspan="5"><span class="e">加载失败</span> · <button class="btn ghost small" id="u-usage-retry">重试</button></td></tr>';
       var rb=$('u-usage-retry'); if(rb) rb.onclick=loadUserUsage;
     }).catch(function(){ ['u-total','u-rate','u-tokens'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); });
     api('/me/logs').then(function(r){
-      if(r.ok){ renderRecent(Array.isArray(r.body)?r.body:[], 'u-recent'); return; }
+      if(r.ok){ var lg=Array.isArray(r.body)?r.body:[]; renderRecent(lg, 'u-recent'); uLogs=lg.length; maybeOnboard(); return; }
       $('u-recent').innerHTML='<tr><td colspan="6" style="color:var(--red)">加载失败,点此重试</td></tr>';
       var c=$('u-recent').querySelector('td'); if(c) c.onclick=loadUserUsage;
     });
@@ -1162,6 +1220,7 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- billing / balance (money in micro-USD) ----------------
   function usd(micro){ return ((micro==null?0:micro)/1000000).toFixed(4); }
+  function usd2(micro){ return ((micro==null?0:micro)/1000000).toFixed(2); }
   function txnRow(t, withSub){
     var time=fmtDate(t.created_at);
     var amtc=(t.kind==='topup')?'var(--green)':'var(--red)';
@@ -1173,7 +1232,7 @@ const PAGE = String.raw`<!doctype html>
       +'<td class="n">'+usd(t.balance_after_micro)+'</td>'
       +'<td>'+esc(t.model||'–')+'</td>'
       +'<td class="n">'+(t.tokens==null?'–':t.tokens)+'</td>'
-      +'<td style="color:var(--faint)">'+esc(t.note||'–')+'</td>';
+      +'<td style="color:var(--faint)">'+esc(t.note||'–')+(t.estimated?' <span class="badge" title="上游未回报用量,按上限预估">预估</span>':'')+'</td>';
     return '<tr>'+cells+'</tr>';
   }
 
@@ -1220,6 +1279,7 @@ const PAGE = String.raw`<!doctype html>
     var note=$('bill-note').value.trim();
     var o=$('bill-topup-out'); o.style.display='block';
     if(!sub || !(amount>0)){ o.innerHTML='<span class="e">请填写有效的 sub 和金额</span>'; return; }
+    if(!confirm('确认为 '+sub.slice(0,16)+' 充值 '+amount+' USD？')){ o.style.display='none'; return; }
     var btn=$('bill-topup'); btn.disabled=true;
     var payload={amount_usd:amount}; if(note) payload.note=note;
     api('/admin/balances/'+encodeURIComponent(sub)+'/topup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
@@ -1279,6 +1339,7 @@ const PAGE = String.raw`<!doctype html>
     var amount=parseFloat($('bal-topup-amount').value);
     var o=$('bal-topup-out'); o.style.display='block';
     if(!(amount>0)){ o.innerHTML='<span class="e">请填写有效金额</span>'; return; }
+    if(amount<1){ o.innerHTML='<span class="e">最低 1 USD</span>'; return; }
     var btn=$('bal-topup-btn'); btn.disabled=true;
     api('/me/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({amount_usd:amount})})
     .then(function(r){ btn.disabled=false;
@@ -1290,20 +1351,46 @@ const PAGE = String.raw`<!doctype html>
 
   // ---------------- consumer: balance ----------------
   function loadBalance(){
-    if(/[?&]topup=success(?:&|$)/.test(location.search)){ var h=$('bal-topup-success'); if(h) h.style.display='block'; }
+    var rb=$('bal-refresh'); if(rb){ rb.disabled=true; rb.textContent='刷新中…'; }
+    var done=0; function fin(){ if(++done>=2 && rb){ rb.disabled=false; rb.textContent='刷新'; } }
+    // handle Stripe return query params, then strip them so a refresh doesn't re-show the banner
+    if(/[?&]topup=success(?:&|$)/.test(location.search)){
+      var h=$('bal-topup-success'); if(h) h.style.display='block';
+      history.replaceState(null,'',location.pathname+location.hash);
+      pollBalance(5); // async webhook may credit a few seconds after redirect
+    } else if(/[?&]topup=cancel(?:&|$)/.test(location.search)){
+      var oc=$('bal-topup-out'); if(oc){ oc.style.display='block'; oc.innerHTML='<span class="hint">已取消充值</span>'; }
+      history.replaceState(null,'',location.pathname+location.hash);
+    }
     api('/me/balance').then(function(r){
-      // distinguish a failed read from a genuine zero balance — never show fake 0.0000
-      if(!(r.ok && r.body && r.body.balance_micro!=null)){ $('bal-usd').innerHTML='<span class="e">读取失败</span>'; return; }
+      // distinguish a failed read from a genuine zero balance — never show fake 0.00
+      if(!(r.ok && r.body && r.body.balance_micro!=null)){ $('bal-usd').innerHTML='<span class="e">读取失败</span>'; fin(); return; }
       var bal=r.body.balance_micro;
-      $('bal-usd').textContent = usd(bal);
+      $('bal-usd').textContent = usd2(bal);
       $('bal-usd').style.color = bal<=0 ? 'var(--red)' : '';
-    }).catch(function(){ $('bal-usd').textContent='–'; });
+      fin();
+    }).catch(function(){ $('bal-usd').textContent='–'; fin(); });
     var tb=$('bal-txns-body');
     api('/me/transactions').then(function(r){
       var list=Array.isArray(r.body)?r.body:[];
-      if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">暂无</td></tr>'; return; }
+      if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">暂无</td></tr>'; fin(); return; }
       tb.innerHTML=list.map(function(t){ return txnRow(t, false); }).join('');
-    }).catch(function(){ tb.innerHTML='<tr><td colspan="7" class="e">出错</td></tr>'; });
+      fin();
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="7" class="e">出错</td></tr>'; fin(); });
+  }
+  // short-poll balance after a Stripe success so async webhook credit reflects without a manual refresh
+  function pollBalance(left){
+    if(left<=0) return;
+    setTimeout(function(){
+      api('/me/balance').then(function(r){
+        if(r.ok && r.body && r.body.balance_micro!=null){
+          var bal=r.body.balance_micro;
+          $('bal-usd').textContent = usd2(bal);
+          $('bal-usd').style.color = bal<=0 ? 'var(--red)' : '';
+        }
+        pollBalance(left-1);
+      }).catch(function(){ pollBalance(left-1); });
+    }, 3000);
   }
 
   // ---------------- admin: per-key list ----------------
@@ -1363,13 +1450,17 @@ const PAGE = String.raw`<!doctype html>
         var proj = k.project_id
           ? ' <span class="badge" style="background:var(--cream);border-color:#cfcbbd;color:var(--faint);font-size:9.5px;padding:0 6px" title="project '+esc(String(k.project_id))+'">proj …'+esc(String(k.project_id).slice(-4))+'</span>'
           : '';
+        // per-key health surfacing: consecutive-fail streak, cooldown deadline, last-used.
+        var cf = (k.consecutive_fails>0) ? ' <span style="color:var(--red)">(连败 '+k.consecutive_fails+'/3)</span>' : '';
+        var cool = (k.status==='cooldown' && k.cooldown_until) ? ('冷却至 '+fmtDate(k.cooldown_until)) : '';
+        var luTitle = '最近使用 '+(k.last_used_at ? fmtDate(k.last_used_at) : '从未使用');
         return '<tr data-id="'+k.id+'">'
           +'<td><span class="dot '+sd+'" title="'+sLabel+'"></span>'+esc(k.provider)+proj+'</td>'
           +'<td style="font-family:ui-monospace,monospace;font-size:12.5px">'+esc(k.masked)+'</td>'
-          +'<td class="n">'+k.total_requests+' / '+k.total_fails+'</td>'
-          +'<td style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis"'+(reason?' title="'+esc(String(reason))+'"':'')+'>'+err+'</td>'
+          +'<td class="n">'+k.total_requests+' / '+k.total_fails+cf+'</td>'
+          +'<td class="kl-err" style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis"'+((cool||reason)?' title="'+esc(cool||String(reason))+'"':'')+'>'+(cool?'<span style="color:var(--amber)">'+esc(cool)+'</span>':err)+'</td>'
           +'<td class="kl-result" style="font-size:12.5px;white-space:nowrap"></td>'
-          +'<td style="color:var(--faint);font-size:12px;white-space:nowrap" title="'+(k.created_at?esc(new Date(k.created_at).toLocaleString()):'')+'">'+(k.created_at?fmtDate(k.created_at):'–')+'</td>'
+          +'<td style="color:var(--faint);font-size:12px;white-space:nowrap" title="'+esc((k.created_at?'添加于 '+new Date(k.created_at).toLocaleString()+' · ':'')+luTitle)+'">'+(k.created_at?fmtDate(k.created_at):'–')+'</td>'
           +'<td style="white-space:nowrap"><button class="btn ghost small kl-check">测活</button> '+toggle+' <button class="btn ghost small kl-del">删</button></td>'
           +'</tr>';
       }).join('');
@@ -1381,12 +1472,20 @@ const PAGE = String.raw`<!doctype html>
           chk.disabled=true; res.textContent='测…';
           api('/admin/keys/'+id+'/check',{method:'POST'}).then(function(r){
             chk.disabled=false; var b=r.body||{};
+            var dot=tr.querySelector('.dot');
+            var ec=tr.querySelector('.kl-err');
             if(b.alive){
               var bal = (b.balance && b.balance.remaining!=null)
                 ? ' · 余 '+(Math.round(b.balance.remaining*100)/100)+' '+b.balance.unit : '';
               res.innerHTML='<span style="color:var(--green)">可用'+(b.rateLimited?'(限流)':'')+'</span>'+bal;
+              // a passing check reactivates the key server-side (unless rate-limited).
+              // reflect that on THIS row in place — never reload the whole table, which
+              // would wipe other rows' in-progress 测活 results.
+              if(dot){
+                if(b.rateLimited){ dot.className='dot d-warn'; dot.title='异常(仍在用)'; }
+                else { dot.className='dot d-active'; dot.title='可用'; if(ec){ ec.textContent=''; ec.removeAttribute('title'); } }
+              }
             } else { res.innerHTML='<span style="color:var(--red)">不可用 '+(b.status||'')+'</span>'; }
-            setTimeout(loadKeyList, 1000);
           }).catch(function(){ chk.disabled=false; res.innerHTML='<span style="color:var(--red)">出错</span>'; });
         };
         var en=tr.querySelector('.kl-enable'); if(en) en.onclick=function(){ api('/admin/keys/'+id+'/enable',{method:'POST'}).then(loadKeyList); };
@@ -1661,8 +1760,12 @@ const PAGE = String.raw`<!doctype html>
   function probeModels(){
     var btn=$('modelstatus-probe'); var el=$('modelstatus-body');
     if(btn) btn.disabled=true; if(el) el.innerHTML='探测中…(逐个模型试调一次,稍候十几秒)';
-    api('/admin/probe-models',{method:'POST'}).then(function(){ if(btn) btn.disabled=false; loadModelStatus(); })
-    .catch(function(){ if(btn) btn.disabled=false; loadModelStatus(); });
+    api('/admin/probe-models',{method:'POST'}).then(function(r){ if(btn) btn.disabled=false;
+      if(!r.ok){ if(el) el.innerHTML='<span class="e">探测出错 '+r.status+'</span>'; return; }
+      var b=r.body||{};
+      var p=loadModelStatus();
+      if(el && b.checked!=null && p && p.then) p.then(function(){ el.innerHTML='<div style="margin-bottom:6px;color:var(--muted)">本轮探测 '+(b.checked||0)+' · 屏蔽 '+(b.blocked||0)+'</div>'+el.innerHTML; });
+    }).catch(function(){ if(btn) btn.disabled=false; if(el) el.innerHTML='<span class="e">探测出错</span>'; });
   }
 
   // ---------------- admin: users ----------------
@@ -1756,9 +1859,10 @@ const PAGE = String.raw`<!doctype html>
   // ---------------- wire static handlers ----------------
   $('my-mint').onclick = mintMy;
   $('my-tokens-refresh').onclick = loadMyTokens;
-  $('ov-refresh').onclick = function(){ loadStats('ov'); };
+  $('ov-refresh').onclick = function(){ var b=$('ov-refresh'); b.disabled=true; var po=$('ov-probe-out'); if(po) po.style.display='none'; loadStats('ov').then(function(){ b.disabled=false; }).catch(function(){ b.disabled=false; }); };
   $('ov-probe').onclick = probe;
   $('keys-refresh').onclick = function(){ loadStats('keys'); };
+  $('keys-tokeylist').onclick = function(){ selectSection('keylist'); };
   $('modelstatus-refresh').onclick = loadModelStatus;
   $('modelstatus-probe').onclick = probeModels;
   $('importBtn').onclick = importKeys;
@@ -1772,6 +1876,7 @@ const PAGE = String.raw`<!doctype html>
   $('price-save').onclick = savePrice;
   $('bal-refresh').onclick = loadBalance;
   $('bal-topup-btn').onclick = checkout;
+  (function(){ var c=$('bal-topup-chips'); if(c){ var bs=c.querySelectorAll('button'); for(var i=0;i<bs.length;i++){ bs[i].onclick=function(){ $('bal-topup-amount').value=this.getAttribute('data-amt'); }; } } })();
   $('pending-refresh').onclick = function(){ boot(); };
 
   // ---------------- boot / routing ----------------
