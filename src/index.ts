@@ -18,7 +18,9 @@ import openai from "./routes/openai";
 import passthrough from "./routes/passthrough";
 import stripe from "./routes/stripe";
 
-const app = new Hono<{ Bindings: Env }>();
+// strict:false so a trailing slash (e.g. `/v1/chat/completions/` sent by some
+// OpenAI-compatible clients) still matches the route instead of 404ing.
+const app = new Hono<{ Bindings: Env }>({ strict: false });
 
 // Role-routed admin/consumer console (self-contained HTML). Auth is enforced
 // by the API routes it calls (SSO session or bearer token).

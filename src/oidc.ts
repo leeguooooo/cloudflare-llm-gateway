@@ -12,7 +12,7 @@
 
 import { Hono } from "hono";
 import type { Env, Role } from "./types";
-import { upsertUser, getUserBySub } from "./db";
+import { upsertUser, getUserBySub, topUpMicro } from "./db";
 
 const DEFAULT_ISSUER = ""; // set OIDC_ISSUER; empty => SSO disabled
 const SESSION_COOKIE = "kp_session";
@@ -249,7 +249,16 @@ app.get("/callback", async (c) => {
   const isAdmin = email === admin && info.email_verified !== false;
   const sub = info.sub || email;
   const name = info.name || null;
+  // Campaign signup bonus: grant SIGNUP_BONUS_USD once, on a consumer's FIRST
+  // login (detected before the upsert). Admins don't get a balance.
+  const isNew = !(await getUserBySub(c.env, sub));
   const row = await upsertUser(c.env, { sub, email, name, isAdmin });
+  if (isNew && !isAdmin) {
+    const bonusUsd = Number(c.env.SIGNUP_BONUS_USD);
+    if (Number.isFinite(bonusUsd) && bonusUsd > 0) {
+      await topUpMicro(c.env, sub, Math.round(bonusUsd * 1_000_000), "新用户活动赠送");
+    }
+  }
   const session = await jwtSign(
     {
       sub,

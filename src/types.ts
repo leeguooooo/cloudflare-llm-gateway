@@ -51,6 +51,8 @@ export interface Env {
   DEFAULT_PRICE_MICRO?: string;
   /** Global sell discount on market prices (e.g. "0.1" = 1折). Default 1. */
   DISCOUNT?: string;
+  /** Campaign signup bonus in USD granted once on a consumer's first login. */
+  SIGNUP_BONUS_USD?: string;
   /** Stripe (Worker secrets) — online top-up; unset = payment disabled. */
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
