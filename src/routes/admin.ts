@@ -17,6 +17,7 @@ import {
   listAllKeys,
   getKeyById,
   deleteKey,
+  prunePermanentlyDeadKeys,
   usageSummary,
   recentLogs,
   listBalances,
@@ -335,6 +336,13 @@ app.post("/keys/:id/chat", async (c) => {
     stream: body.stream === true ? true : undefined,
   };
   return adapter.chatCompletions(req, row.api_key);
+});
+
+// POST /keys/prune — delete only permanently-dead keys (invalid/revoked/404).
+// Arrears / 欠费 / 余额不足 are kept (they auto-recover on top-up).
+app.post("/keys/prune", async (c) => {
+  const removed = await prunePermanentlyDeadKeys(c.env);
+  return c.json({ removed });
 });
 
 // DELETE /keys/:id — permanently remove a key.
