@@ -316,7 +316,7 @@ const PAGE = String.raw`<!doctype html>
       <section class="section" id="sec-modelstats">
         <h2 class="sec-h">模型排行</h2>
         <p class="sec-sub">// 按真实调用数据对比,挑选最合适的模型</p>
-        <p class="hint" style="margin-top:0">近 7 天全网真实请求统计。延迟、平均输出按成功请求计算;点表头可排序。响应延迟越低越快。</p>
+        <p class="hint" style="margin-top:0">近 7 天全网真实请求统计。延迟、平均输出按成功请求计算;价格为你实际支付价(已含折扣)。点表头可排序:延迟低=快,价格低=省。</p>
         <div class="card r1">
           <h2 class="h-green"><span class="hd"></span>模型对比<span style="flex:1"></span><button class="btn ghost small" id="modelstats-refresh">刷新</button></h2>
           <table>
@@ -324,12 +324,13 @@ const PAGE = String.raw`<!doctype html>
               <th>模型</th><th>来源</th>
               <th class="ms-sort n" data-sort="avg_latency">响应延迟 ▲</th>
               <th class="ms-sort n" data-sort="rate">成功率</th>
+              <th class="ms-sort n" data-sort="price" title="每 100 万 token 美元价(已含折扣),入/出">价格 $/1M 入/出</th>
               <th class="ms-sort n" data-sort="avg_out">平均输出</th>
               <th class="ms-sort n" data-sort="n">近7天调用</th>
             </tr></thead>
-            <tbody id="modelstats-body"><tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <tbody id="modelstats-body"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
-          <div class="hint">响应延迟:开始返回的耗时(流式为首字节 TTFT,非流式为整次往返)。样本越多(近7天调用)越可信;无成功样本的模型延迟显示 –。</div>
+          <div class="hint">响应延迟:开始返回的耗时(流式为首字节 TTFT,非流式为整次往返)。价格 = 每 100 万 token 的美元单价(已含折扣),按输出价排序。样本越多越可信;无成功样本的模型延迟显示 –。</div>
         </div>
       </section>
 
@@ -833,24 +834,28 @@ const PAGE = String.raw`<!doctype html>
   var msAsc=true;             // ascending? (latency default asc = fastest first)
   function loadModelStats(){
     var tb=$('modelstats-body'); if(!tb) return;
-    tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">加载中…</td></tr>';
+    tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr>';
     return api('/me/model-stats').then(function(r){
-      if(!r.ok){ tb.innerHTML='<tr><td colspan="6" style="color:var(--red)">加载失败 · <button class="btn ghost small" id="ms-retry">重试</button></td></tr>'; var rb=$('ms-retry'); if(rb) rb.onclick=loadModelStats; return; }
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">加载失败 · <button class="btn ghost small" id="ms-retry">重试</button></td></tr>'; var rb=$('ms-retry'); if(rb) rb.onclick=loadModelStats; return; }
       msRows=Array.isArray(r.body)?r.body:[];
       renderModelStats();
-    }).catch(function(){ tb.innerHTML='<tr><td colspan="6" style="color:var(--red)">网络错误</td></tr>'; });
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">网络错误</td></tr>'; });
   }
-  // sort key; models with no successful sample have meaningless latency/output, so
-  // they always sink (Infinity in asc, -Infinity in desc) regardless of column.
+  // USD per 1M tokens from micro-USD, trimmed to a compact significant form.
+  function mtokUsd(micro){ var v=(micro||0)/1e6; return v>=1?v.toFixed(2):v.toFixed(3); }
+  // sort key; price sorts by output price (the dominant cost). Models with no
+  // successful sample have meaningless latency/output, so they sink (Infinity in
+  // asc, -Infinity in desc) for those columns — but price/rate/n stay comparable.
   function msVal(x,k){
     if(k==='rate') return x.n>0?x.ok/x.n:0;
     if(k==='n') return x.n||0;
+    if(k==='price') return x.price_out_micro||0;
     if(x.ok<=0) return msAsc?Infinity:-Infinity; // latency/avg_out undefined without a success
     return x[k]||0;
   }
   function renderModelStats(){
     var tb=$('modelstats-body'); if(!tb) return;
-    if(!msRows || !msRows.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--faint)">近 7 天还没有调用数据</td></tr>'; return; }
+    if(!msRows || !msRows.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">近 7 天还没有调用数据</td></tr>'; return; }
     var rows=msRows.slice().sort(function(a,b){ var d=msVal(a,msSort)-msVal(b,msSort); return msAsc?d:-d; });
     tb.innerHTML=rows.map(function(x){
       var d=MODEL_LABELS[x.model];
@@ -862,6 +867,7 @@ const PAGE = String.raw`<!doctype html>
         +'<td>'+prov+'</td>'
         +'<td class="n">'+(hasOk?fmtNum(Math.round(x.avg_latency))+' ms':'<span style="color:var(--faint)">–</span>')+'</td>'
         +'<td class="n" style="color:'+ratec+'">'+rate+'%</td>'
+        +'<td class="n" title="每 100 万 token 美元价(含折扣)">'+mtokUsd(x.price_in_micro)+' / '+mtokUsd(x.price_out_micro)+'</td>'
         +'<td class="n">'+(hasOk?fmtNum(Math.round(x.avg_out)):'<span style="color:var(--faint)">–</span>')+'</td>'
         +'<td class="n">'+fmtNum(x.n)+'</td></tr>';
     }).join('');

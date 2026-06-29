@@ -19,6 +19,7 @@ import {
   getBalanceMicro,
   listTransactions,
   modelStats,
+  billingDiscount,
 } from "../db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -113,7 +114,27 @@ app.get("/model-stats", async (c) => {
     return c.json({ error: { message: "未登录", type: "unauthorized" } }, 401);
   }
   const sinceMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  return c.json(await modelStats(c.env, { sinceMs, limit: 100 }));
+  const rows = await modelStats(c.env, { sinceMs, limit: 100 });
+  // Apply the billing discount so the price columns show what the consumer pays
+  // (micro-USD per 1M tokens). Fall back input/output → legacy → DEFAULT_PRICE.
+  const discount = billingDiscount(c.env);
+  const fallback = Number(c.env.DEFAULT_PRICE_MICRO ?? "500000");
+  const out = rows.map((r) => {
+    const legacy = r.legacy_micro ?? fallback;
+    const priceInMicro = Math.round((r.in_micro ?? legacy) * discount);
+    const priceOutMicro = Math.round((r.out_micro ?? legacy) * discount);
+    return {
+      model: r.model,
+      provider: r.provider,
+      n: r.n,
+      ok: r.ok,
+      avg_latency: r.avg_latency,
+      avg_out: r.avg_out,
+      price_in_micro: priceInMicro,
+      price_out_micro: priceOutMicro,
+    };
+  });
+  return c.json(out);
 });
 
 // GET /balance — the caller's own balance in micro-USD.
