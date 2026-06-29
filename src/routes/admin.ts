@@ -17,6 +17,7 @@ import {
   listAllKeys,
   getKeyById,
   deleteKey,
+  deleteToken,
   prunePermanentlyDeadKeys,
   usageSummary,
   usageByUser,
@@ -244,6 +245,16 @@ app.post("/tokens", async (c) => {
 app.get("/tokens", async (c) => {
   const tokens = await listTokens(c.env);
   return c.json(tokens);
+});
+
+// DELETE /tokens/:id — permanently revoke an access token.
+app.delete("/tokens/:id", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) {
+    return c.json({ error: { message: "invalid token id", type: "invalid_request_error" } }, 400);
+  }
+  const ok = await deleteToken(c.env, id);
+  return c.json({ ok }, ok ? 200 : 404);
 });
 
 // GET /users — list all users (pending first, newest first within group).

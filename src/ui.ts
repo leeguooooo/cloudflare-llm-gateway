@@ -172,6 +172,7 @@ const PAGE = String.raw`<!doctype html>
     .main .wrap{padding-top:18px}
   }
 </style>
+<script defer src="https://blog.leeguoo.com/scripts/visitor-beacon.js?v=20260629-2"></script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs>
@@ -244,11 +245,30 @@ const PAGE = String.raw`<!doctype html>
         <div class="card r1">
           <h2 class="h-blue"><span class="hd"></span>接入地址</h2>
           <div class="hint" style="margin-top:0">主接口(OpenAI 兼容):</div>
-          <div class="endpoint" id="dash-endpoint"></div>
+          <div class="endpoint"><span class="copyable" id="dash-endpoint"></span></div>
           <div id="dash-token-area" style="margin-top:16px"></div>
         </div>
+        <div class="grid3">
+          <div class="stat">
+            <div class="num" id="dash-balance" style="color:var(--red)">…</div>
+            <div class="lbl">余额 (USD)</div>
+            <div class="hint" id="dash-bal-hint" style="display:none">余额不足，请充值</div>
+            <button class="btn ghost small" id="dash-topup" style="margin-top:8px">充值</button>
+          </div>
+          <div class="stat">
+            <div class="num" id="dash-req">…</div>
+            <div class="lbl">近30天请求</div>
+          </div>
+          <div class="stat">
+            <div class="num" id="dash-tok">…</div>
+            <div class="lbl">近30天 token</div>
+          </div>
+        </div>
         <div class="card r2">
-          <h2 class="h-green"><span class="hd"></span>快速开始</h2>
+          <h2 class="h-green"><span class="hd"></span>快速开始
+            <span style="flex:1"></span>
+            <button class="btn ghost small" id="dash-curl-copy">复制</button>
+          </h2>
           <div class="out" id="dash-curl"></div>
           <div class="hint">把 <code>$KEY</code> 换成上面的令牌即可。模型 id 见「模型」页。</div>
         </div>
@@ -272,8 +292,8 @@ const PAGE = String.raw`<!doctype html>
             <button class="btn ghost small" id="my-tokens-refresh">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>id</th><th>名字</th><th>令牌</th><th>启用</th><th>用量</th><th>创建</th><th></th></tr></thead>
-            <tbody id="my-token-list"><tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <thead><tr><th>id</th><th>名字</th><th>令牌</th><th>启用</th><th>用量</th><th>限速</th><th>有效期</th><th>创建</th><th></th></tr></thead>
+            <tbody id="my-token-list"><tr><td colspan="9" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -293,21 +313,30 @@ const PAGE = String.raw`<!doctype html>
       <!-- ----- shared: 文档 ----- -->
       <section class="section" id="sec-docs">
         <h2 class="sec-h">文档</h2>
-        <p class="sec-sub">// OpenAI 兼容 · 同一套 SDK 即可接入</p>
+        <p class="sec-sub">// OpenAI / Anthropic 兼容 · 同一套 SDK 即可接入</p>
         <div class="card r1">
           <h2 class="h-blue"><span class="hd"></span>接口与鉴权</h2>
           <div class="hint" style="margin-top:0">Chat Completions 接口:</div>
-          <div class="endpoint" id="docs-endpoint"></div>
+          <div class="endpoint copyable" id="docs-endpoint" title="点击复制"></div>
           <div class="hint">鉴权头:</div>
           <div class="endpoint">Authorization: Bearer &lt;你的令牌&gt;</div>
         </div>
         <div class="card r2">
-          <h2 class="h-green"><span class="hd"></span>curl</h2>
+          <h2 class="h-green"><span class="hd"></span>curl<span style="flex:1"></span><button class="btn ghost small" id="docs-curl-copy">复制</button></h2>
           <div class="out" id="docs-curl"></div>
         </div>
         <div class="card r1">
-          <h2 class="h-yellow"><span class="hd"></span>OpenAI SDK</h2>
+          <h2 class="h-yellow"><span class="hd"></span>OpenAI SDK<span style="flex:1"></span><button class="btn ghost small" id="docs-sdk-copy">复制</button></h2>
           <div class="out" id="docs-sdk"></div>
+        </div>
+
+        <div class="card r2">
+          <h2 class="h-yellow"><span class="hd"></span>Anthropic 兼容(Claude SDK)<span style="flex:1"></span><button class="btn ghost small" id="docs-anthropic-copy">复制</button></h2>
+          <div class="hint" style="margin-top:0">网关同时实现 Anthropic Messages 接口,Claude 官方 SDK / Claude Code 可直接接入:</div>
+          <div class="endpoint">POST <span id="docs-anthropic-ep" class="copyable" title="点击复制"></span></div>
+          <div class="hint">鉴权:<code>x-api-key: &lt;你的令牌&gt;</code> 或 <code>Authorization: Bearer &lt;你的令牌&gt;</code>。<code>base_url</code> 用上面的 Base URL,模型 id 与 OpenAI 接口<b>同一套</b>。</div>
+          <div class="out" id="docs-anthropic"></div>
+          <div class="hint">请求体为 Anthropic 格式:<code>messages</code> + <code>max_tokens</code>(必填)。响应同样带 <code>X-KeyPool-Provider</code> / <code>X-KeyPool-Model</code> / <code>X-KeyPool-Fallback</code> 响应头(回退后 Model 可能与请求不同)。</div>
         </div>
         <div class="card r2">
           <h2 class="h-blue"><span class="hd"></span>模型 id</h2>
@@ -318,9 +347,9 @@ const PAGE = String.raw`<!doctype html>
         </div>
 
         <div class="card r1">
-          <h2 class="h-blue"><span class="hd"></span>POST /v1/chat/completions</h2>
+          <h2 class="h-blue"><span class="hd"></span>POST /v1/chat/completions<span style="flex:1"></span><button class="btn ghost small" id="docs-reqbody-copy">复制</button></h2>
           <div class="hint" style="margin-top:0">Base URL(OpenAI <code>baseURL</code> 用这个):</div>
-          <div class="endpoint" id="docs-baseurl"></div>
+          <div class="endpoint copyable" id="docs-baseurl" title="点击复制"></div>
           <div class="hint">请求体(与 OpenAI 一致;支持 <code>stream:true</code> SSE 流式):</div>
           <div class="out" id="docs-reqbody"></div>
           <div class="hint">网关默认会在所选模型不可用时<b>自动回退</b>到同类可用模型。要关闭回退、强制只用所选模型,加 <code>"fallback": false</code>(此时模型不可用直接返回错误)。</div>
@@ -341,10 +370,24 @@ const PAGE = String.raw`<!doctype html>
         <div class="card r1">
           <h2 class="h-yellow"><span class="hd"></span>其它接口</h2>
           <div class="hint" style="margin-top:0"><code>GET /v1/models</code> — 列出当前可路由的模型(仅含有可用 key、且未被标记不可用的模型):</div>
-          <div class="endpoint">GET <span id="docs-models-ep"></span></div>
+          <div class="endpoint">GET <span id="docs-models-ep" class="copyable" title="点击复制"></span></div>
           <div class="hint">原生透传(直接用各家原生协议,网关只负责选 key 与计费):</div>
           <div class="endpoint">/gemini/*&nbsp;&nbsp;·&nbsp;&nbsp;/mistral/*&nbsp;&nbsp;·&nbsp;&nbsp;/openrouter/*</div>
           <div class="hint">把上游的原生路径接在前缀后即可,例如 <code>/gemini/v1beta/models/...:generateContent</code>。鉴权同样用 <code>Authorization: Bearer &lt;你的令牌&gt;</code>。</div>
+        </div>
+
+        <div class="card r1">
+          <h2 class="h-red"><span class="hd"></span>错误码</h2>
+          <div class="hint" style="margin-top:0">错误响应为 OpenAI 兼容结构,错误信息在 <code>body.error.message</code>:</div>
+          <table>
+            <thead><tr><th>状态码</th><th>含义 / 处理</th></tr></thead>
+            <tbody>
+              <tr><td class="mono-token">402</td><td style="color:var(--muted)">余额不足 — 充值后重试</td></tr>
+              <tr><td class="mono-token">429</td><td style="color:var(--muted)">限流 / 额度超限 — 退避后重试</td></tr>
+              <tr><td class="mono-token">4xx</td><td style="color:var(--muted)">请求错误(参数 / 模型 id / 鉴权)</td></tr>
+              <tr><td class="mono-token">5xx</td><td style="color:var(--muted)">上游错误 — 稍后重试</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <div class="card r2">
@@ -359,7 +402,9 @@ const PAGE = String.raw`<!doctype html>
         <p class="sec-sub">// key 池健康度</p>
         <div class="card r1">
           <h2 class="h-green"><span class="hd"></span>池子状态
+            <span id="ov-verdict" class="hint" style="margin:0 0 0 12px"></span>
             <span style="flex:1"></span>
+            <span id="ov-stamp" class="hint" style="margin:0 10px 0 0"></span>
             <button class="btn ghost small" id="ov-probe">巡检</button>
             <button class="btn ghost small" id="ov-refresh">刷新</button>
           </h2>
@@ -415,6 +460,7 @@ const PAGE = String.raw`<!doctype html>
         <p class="sec-sub">// 每个 key 单独查看与操作 · 测活 / 余额(OpenRouter)</p>
         <div class="card r1">
           <h2 class="h-red"><span class="hd"></span>所有 key
+            <span id="keylist-summary" class="hint" style="margin:0 0 0 12px"></span>
             <span style="flex:1"></span>
             <span id="keylist-checkall-out" class="hint" style="margin:0 10px 0 0"></span>
             <button class="btn ghost small" id="keylist-toggle">显示禁用</button>
@@ -436,6 +482,7 @@ const PAGE = String.raw`<!doctype html>
         <p class="sec-sub">// 开通制 · 待开通的排在最上面</p>
         <div class="card r1">
           <h2 class="h-red"><span class="hd"></span>用户列表
+            <span id="users-pending" class="badge" style="margin:0 0 0 12px"></span>
             <span style="flex:1"></span>
             <button class="btn ghost small" id="users-refresh">刷新</button>
           </h2>
@@ -457,8 +504,10 @@ const PAGE = String.raw`<!doctype html>
             <div><label>配额(请求数)</label><input id="adm-quota" type="number" min="1" placeholder="无限" /></div>
             <div><label>限速(RPM)</label><input id="adm-rpm" type="number" min="1" placeholder="无限" /></div>
             <div><label>有效期(天)</label><input id="adm-exp" type="number" min="1" placeholder="永久" /></div>
+            <div><label>角色</label><select id="adm-role"><option value="user">用户</option><option value="admin">管理员</option></select></div>
             <button class="btn primary" id="adm-mint">发一个令牌</button>
           </div>
+          <p class="hint">仅显示一次，请立即复制保存</p>
           <div class="out" id="adm-mint-out" style="display:none"></div>
         </div>
         <div class="card r1">
@@ -467,8 +516,8 @@ const PAGE = String.raw`<!doctype html>
             <button class="btn ghost small" id="adm-tokens-refresh">刷新</button>
           </h2>
           <table>
-            <thead><tr><th>id</th><th>名字</th><th>角色</th><th>用量</th><th>RPM</th><th>过期</th><th>启用</th><th>创建</th></tr></thead>
-            <tbody id="adm-token-list"><tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr></tbody>
+            <thead><tr><th>id</th><th>名字</th><th>角色</th><th>归属</th><th>用量</th><th>RPM</th><th>过期</th><th>启用</th><th>创建</th><th>操作</th></tr></thead>
+            <tbody id="adm-token-list"><tr><td colspan="10" style="color:var(--faint)">加载中…</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -482,6 +531,7 @@ const PAGE = String.raw`<!doctype html>
             <div><label>模型</label><select id="chat-model"></select></div>
             <button class="btn ghost small" id="chat-clear">清空</button>
           </div>
+          <div class="hint" id="chat-balance" style="margin-bottom:10px">剩余余额 <span id="chat-bal-usd">–</span> USD</div>
           <div id="chat-log" style="min-height:180px; max-height:420px; overflow:auto; border:2px dashed #cfcbbd; border-radius:12px; padding:12px; background:var(--cream)"><span style="color:var(--faint)">开始对话…</span></div>
           <div class="row" style="margin-top:12px; align-items:stretch">
             <div><textarea id="chat-input" style="min-height:56px" placeholder="说点什么…(Enter 发送,Shift+Enter 换行)"></textarea></div>
@@ -601,6 +651,11 @@ const PAGE = String.raw`<!doctype html>
             <span style="flex:1"></span>
             <button class="btn ghost small" id="bill-balances-refresh">刷新</button>
           </h2>
+          <div class="grid3" style="margin-bottom:14px">
+            <div class="stat"><div class="lbl">余额合计 USD</div><div class="num" id="bal-sum">–</div></div>
+            <div class="stat"><div class="lbl">用户数</div><div class="num" id="bal-users">–</div></div>
+            <div class="stat"><div class="lbl">付费用户数</div><div class="num" id="bal-paid">–</div></div>
+          </div>
           <table>
             <thead><tr><th>邮箱</th><th>sub</th><th>余额 USD</th><th></th></tr></thead>
             <tbody id="bill-balances-body"><tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr></tbody>
@@ -791,8 +846,8 @@ const PAGE = String.raw`<!doctype html>
     if(id==='models' || id==='docs'){
       loadModels().then(function(){ renderModelsInto('models-body'); renderModelsInto('docs-models-body'); fillDocs(); });
     }
-    if(id==='dashboard') loadDashboard();
-    if(id==='tokens') loadMyTokens();
+    if(id==='dashboard') loadModels().then(loadDashboard);
+    if(id==='tokens'){ var mo=$('my-mint-out'); if(mo){ mo.style.display='none'; mo.innerHTML=''; } loadMyTokens(); }
     if(id==='overview') loadStats('ov');
     if(id==='keys'){ loadStats('keys'); loadModelStatus(); }
     if(id==='keylist'){ var rb=$('keylist-refresh'); if(rb) rb.onclick=loadKeyList; var cb=$('keylist-checkall'); if(cb) cb.onclick=checkAllKeys; var tg=$('keylist-toggle'); if(tg) tg.onclick=function(){ keylistShowDisabled=!keylistShowDisabled; loadKeyList(); }; var pr=$('keylist-prune'); if(pr) pr.onclick=function(){ if(!confirm('清理所有永久失效的 key?欠费的会保留')) return; pr.disabled=true; var out=$('keylist-checkall-out'); if(out) out.textContent='清理中…'; api('/admin/keys/prune',{method:'POST'}).then(function(r){ pr.disabled=false; if(out) out.textContent='已清理 '+((r.body&&r.body.removed)||0)+' 个失效 key'; loadKeyList(); }).catch(function(){ pr.disabled=false; if(out) out.textContent='清理出错'; }); }; loadKeyList(); }
@@ -821,8 +876,10 @@ const PAGE = String.raw`<!doctype html>
       var who = m.role==='user'?'你':(m.role==='assistant'?'AI':m.role);
       var col = m.role==='user'?'var(--blue)':'var(--green)';
       var note = m.note ? '<div style="font-size:12px;color:var(--amber);margin-top:2px">⤷ '+esc(m.note)+'</div>' : '';
+      var raw = String(m.content==null?'':m.content);
+      var body = (m.role==='assistant' && raw==='') ? '<span style="color:var(--faint)">▍…</span>' : esc(raw);
       return '<div style="margin-bottom:11px"><b style="font-family:var(--marker);color:'+col+'">'+who+'</b>'+note
-        +'<div style="white-space:pre-wrap;word-break:break-word">'+esc(String(m.content==null?'':m.content))+'</div></div>';
+        +'<div style="white-space:pre-wrap;word-break:break-word">'+body+'</div></div>';
     }).join('');
     el.scrollTop = el.scrollHeight;
   }
@@ -839,9 +896,21 @@ const PAGE = String.raw`<!doctype html>
   // streaming chat: append an assistant bubble that fills in as SSE arrives.
   function streamChat(path, payload, logId, msgs, btn){
     var asst={role:'assistant',content:''};
+    var usage=null, provider='';
     msgs.push(asst); renderChat(logId, msgs);
     payload.stream=true;
-    function fail(s,t){ var j=null; try{j=JSON.parse(t);}catch(e){} asst.content='⚠ [错误 '+s+'] '+((j&&j.error&&(j.error.message||j.error))||t||''); renderChat(logId,msgs); if(btn)btn.disabled=false; }
+    payload.stream_options={include_usage:true};
+    function fail(s,t){
+      var j=null; try{j=JSON.parse(t);}catch(e){}
+      if(s===402){
+        asst.content='余额不足,请先充值'; renderChat(logId,msgs);
+        var lg=$(logId);
+        if(lg){ var bt=document.createElement('button'); bt.className='btn primary small'; bt.textContent='去充值'; bt.style.marginTop='6px'; bt.onclick=function(){ selectSection('balance'); }; lg.appendChild(bt); lg.scrollTop=lg.scrollHeight; }
+        if(btn){ btn.disabled=false; btn.textContent='发送'; }
+        return;
+      }
+      asst.content='⚠ [错误 '+s+'] '+((j&&j.error&&(j.error.message||j.error))||t||''); renderChat(logId,msgs); if(btn){ btn.disabled=false; btn.textContent='发送'; }
+    }
     fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
     .then(function(resp){
       if(!resp.ok || !resp.body){ return resp.text().then(function(t){ fail(resp.status,t); }); }
@@ -850,22 +919,27 @@ const PAGE = String.raw`<!doctype html>
         var actual=resp.headers.get('X-KeyPool-Model')||'';
         if(actual && actual!==(payload.model||'')) asst.note='所选模型暂不可用,已自动改用 '+actual;
       }
+      provider=resp.headers.get('X-KeyPool-Provider')||'';
       var reader=resp.body.getReader(), dec=new TextDecoder(), buf='';
       (function pump(){
         return reader.read().then(function(res){
-          if(res.done){ if(!asst.content) asst.content='(无内容)'; renderChat(logId,msgs); if(btn)btn.disabled=false; return; }
+          if(res.done){
+            if(!asst.content) asst.content='(无内容)';
+            if(usage){ var ntk=(usage.total_tokens!=null)?usage.total_tokens:((usage.prompt_tokens||0)+(usage.completion_tokens||0)); var un='本次 ~'+ntk+' tokens'+(provider?' · '+provider:''); asst.note=asst.note?asst.note+' · '+un:un; }
+            renderChat(logId,msgs); refreshChatBalance(); if(btn){ btn.disabled=false; btn.textContent='发送'; } return;
+          }
           buf+=dec.decode(res.value,{stream:true});
           var parts=buf.split('\n'); buf=parts.pop();
           parts.forEach(function(line){
             line=line.trim(); if(line.indexOf('data:')!==0) return;
             var data=line.slice(5).trim(); if(!data||data==='[DONE]') return;
-            try{ var o=JSON.parse(data); var d=o.choices&&o.choices[0]&&o.choices[0].delta; if(d&&typeof d.content==='string') asst.content+=d.content; }catch(e){}
+            try{ var o=JSON.parse(data); if(o&&o.usage) usage=o.usage; var d=o.choices&&o.choices[0]&&o.choices[0].delta; if(d&&typeof d.content==='string') asst.content+=d.content; }catch(e){}
           });
           renderChat(logId,msgs);
           return pump();
         });
       })();
-    }).catch(function(){ asst.content=asst.content||'⚠ 网络错误'; renderChat(logId,msgs); if(btn)btn.disabled=false; });
+    }).catch(function(){ asst.content=asst.content||'⚠ 网络错误'; renderChat(logId,msgs); if(btn){ btn.disabled=false; btn.textContent='发送'; } });
   }
   // consumer chat (billed)
   var chatMsgs=[];
@@ -900,15 +974,22 @@ const PAGE = String.raw`<!doctype html>
         }).join('');
       }
     });
-    var b=$('chat-send'); if(b) b.onclick=sendChat;
+    var b=$('chat-send'); if(b) b.onclick=sendChat; refreshChatBalance();
     var cl=$('chat-clear'); if(cl) cl.onclick=function(){ chatMsgs=[]; renderChat('chat-log',chatMsgs); };
     bindEnter('chat-input', sendChat);
+  }
+  function refreshChatBalance(){
+    var el=$('chat-bal-usd'); if(!el) return;
+    api('/me/balance').then(function(r){
+      if(!(r.ok && r.body && r.body.balance_micro!=null)){ el.innerHTML='<span class="e">读取失败</span>'; return; }
+      var bal=r.body.balance_micro; el.textContent=usd(bal); el.style.color = bal<=0 ? 'var(--red)' : '';
+    }).catch(function(){ el.textContent='–'; });
   }
   function sendChat(){
     var inp=$('chat-input'), txt=inp.value.trim(); if(!txt) return;
     var model=$('chat-model').value; if(!model) return;
     chatMsgs.push({role:'user',content:txt}); inp.value='';
-    var btn=$('chat-send'); btn.disabled=true;
+    var btn=$('chat-send'); btn.disabled=true; btn.textContent='发送中…';
     streamChat('/v1/chat/completions', {model:model, messages:chatMsgs.slice()}, 'chat-log', chatMsgs, btn);
   }
   // admin debug chat (specific key, no billing)
@@ -1107,7 +1188,12 @@ const PAGE = String.raw`<!doctype html>
   function loadBalances(){
     var tb=$('bill-balances-body');
     return api('/admin/balances').then(function(r){
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="4" class="e">错误 '+r.status+'</td></tr>'; ['bal-sum','bal-users','bal-paid'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); return; }
       var list=Array.isArray(r.body)?r.body:[];
+      var bsum=0,bpaid=0; list.forEach(function(b){ var m=b.balance_micro||0; bsum+=m; if(m>0)bpaid++; });
+      if($('bal-sum')) $('bal-sum').textContent=usd(bsum);
+      if($('bal-users')) $('bal-users').textContent=list.length;
+      if($('bal-paid')) $('bal-paid').textContent=bpaid;
       if(!list.length){ tb.innerHTML='<tr><td colspan="4" style="color:var(--faint)">暂无</td></tr>'; return; }
       tb.innerHTML=list.map(function(b){
         return '<tr><td style="font-weight:700; word-break:break-all">'+esc(b.email||'–')+'</td>'
@@ -1118,7 +1204,7 @@ const PAGE = String.raw`<!doctype html>
       Array.prototype.forEach.call(tb.querySelectorAll('[data-fillsub]'), function(btn){
         btn.onclick=function(){ $('bill-sub').value=btn.getAttribute('data-fillsub'); $('bill-amount').focus(); };
       });
-    }).catch(function(){ tb.innerHTML='<tr><td colspan="4" class="e">出错</td></tr>'; });
+    }).catch(function(){ tb.innerHTML='<tr><td colspan="4" class="e">出错</td></tr>'; ['bal-sum','bal-users','bal-paid'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); });
   }
   function loadBillingTxns(){
     var tb=$('bill-txns-body');
@@ -1241,6 +1327,19 @@ const PAGE = String.raw`<!doctype html>
     tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/keys/list').then(function(r){
       var all=(r.body && r.body.keys) || [];
+      var sm=$('keylist-summary');
+      if(sm){
+        var cD=0,cC=0,cW=0,cA=0;
+        all.forEach(function(k){
+          if(k.status==='disabled') cD++;
+          else if(k.status==='cooldown') cC++;
+          else if(k.last_error) cW++;
+          else cA++;
+        });
+        sm.innerHTML = all.length
+          ? ('共 '+all.length+' · 可用 '+cA+' · 冷却 '+cC+' · 禁用 '+cD+(cW?' · 异常 '+cW:''))
+          : '池子为空';
+      }
       var disN = all.filter(function(k){return k.status==='disabled';}).length;
       var tg=$('keylist-toggle'); if(tg) tg.textContent = keylistShowDisabled ? '只看启用' : ('显示禁用('+disN+')');
       var keys = keylistShowDisabled ? all : all.filter(function(k){return k.status!=='disabled';});
@@ -1297,30 +1396,68 @@ const PAGE = String.raw`<!doctype html>
     }).catch(function(){
       tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">加载失败 · <button class="btn ghost small" id="keylist-retry">重试</button></td></tr>';
       var rb=$('keylist-retry'); if(rb) rb.onclick=loadKeyList;
+      var sm=$('keylist-summary'); if(sm) sm.innerHTML='';
     });
   }
 
   // ---------------- consumer: dashboard ----------------
   function loadDashboard(){
     $('dash-greet').textContent = '// 欢迎回来, ' + (me.email||'');
-    $('dash-endpoint').textContent = 'POST ' + base + '/v1/chat/completions';
+    var ep = 'POST ' + base + '/v1/chat/completions';
+    var es=$('dash-endpoint'); es.textContent = ep; es.setAttribute('data-copy', ep); bindCopy(es.parentNode);
+    var cc=$('dash-curl-copy'); if(cc) cc.onclick = function(){ copy($('dash-curl').textContent, cc); };
+    var tu=$('dash-topup'); if(tu) tu.onclick = function(){ selectSection('balance'); };
+    loadDashTokens();
+    loadDashStats();
+  }
+  function loadDashTokens(){
+    var area=$('dash-token-area');
+    area.innerHTML = '<div class="hint" style="color:var(--faint)">加载令牌中…</div>';
     api('/me/tokens').then(function(r){
+      if(!r.ok){
+        area.innerHTML = '<span class="e">令牌加载失败</span> · <button class="btn ghost small" id="dash-tok-retry">重试</button>';
+        var rb=$('dash-tok-retry'); if(rb) rb.onclick=loadDashTokens;
+        $('dash-curl').innerHTML = curlSnippet(null); return;
+      }
       var list = Array.isArray(r.body)? r.body : [];
       var enabled = list.filter(function(t){ return t.enabled; });
-      var area=$('dash-token-area');
       var tok = enabled.length ? enabled[0].token : null;
       if(tok){
         area.innerHTML = '<label>你的令牌</label>'
           + '<div class="endpoint"><span class="mono-token copyable" data-copy="'+esc(tok)+'">'+esc(tok)+'</span></div>'
           + '<div class="hint">点击即可复制。更多令牌见「我的令牌」。</div>';
         bindCopy(area);
+      } else if(me.status!=='approved'){
+        area.innerHTML = '<div class="hint">账号待开通，请联系管理员</div>';
       } else {
         area.innerHTML = '<button class="btn primary" id="dash-first">生成我的第一个令牌</button>'
           + '<div class="hint">还没有令牌。生成后即可调用接口。</div>';
         $('dash-first').onclick = function(){ selectSection('tokens'); };
       }
       $('dash-curl').innerHTML = curlSnippet(tok);
-    }).catch(function(){ $('dash-curl').innerHTML = curlSnippet(null); });
+    }).catch(function(){
+      area.innerHTML = '<span class="e">网络错误</span> · <button class="btn ghost small" id="dash-tok-retry">重试</button>';
+      var rb=$('dash-tok-retry'); if(rb) rb.onclick=loadDashTokens;
+      $('dash-curl').innerHTML = curlSnippet(null);
+    });
+  }
+  function loadDashStats(){
+    var bn=$('dash-balance'), bh=$('dash-bal-hint');
+    bn.textContent='…'; if(bh) bh.style.display='none';
+    api('/me/balance').then(function(r){
+      // distinguish a failed read from a genuine zero balance — never show fake 0.0000
+      if(!(r.ok && r.body && r.body.balance_micro!=null)){ bn.innerHTML='<span class="e">读取失败</span>'; return; }
+      var bal=r.body.balance_micro;
+      bn.textContent = usd(bal);
+      if(bh) bh.style.display = bal<=0 ? 'block' : 'none';
+    }).catch(function(){ bn.textContent='–'; });
+    var rq=$('dash-req'), tk=$('dash-tok');
+    rq.textContent='…'; tk.textContent='…';
+    api('/me/usage').then(function(r){
+      if(!(r.ok && r.body)){ rq.textContent='–'; tk.textContent='–'; return; }
+      rq.textContent = fmtNum(r.body.total||0);
+      tk.textContent = fmtNum(r.body.tokens||0);
+    }).catch(function(){ rq.textContent='–'; tk.textContent='–'; });
   }
   function curlSnippet(tok){
     var key = tok || '$KEY';
@@ -1341,17 +1478,20 @@ const PAGE = String.raw`<!doctype html>
   // ---------------- consumer: my tokens ----------------
   function loadMyTokens(){
     var tb=$('my-token-list');
-    if(tb) tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">加载中…</td></tr>';
+    if(tb) tb.innerHTML='<tr><td colspan="9" style="color:var(--faint)">加载中…</td></tr>';
     return api('/me/tokens').then(function(r){
-      if(!r.ok){ tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">加载失败 · '+esc((r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status))+' <button class="btn ghost small" id="my-tokens-retry">重试</button></td></tr>'; var rb=$('my-tokens-retry'); if(rb) rb.onclick=loadMyTokens; return; }
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="9" style="color:var(--red)">加载失败 · '+esc((r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status))+' <button class="btn ghost small" id="my-tokens-retry">重试</button></td></tr>'; var rb=$('my-tokens-retry'); if(rb) rb.onclick=loadMyTokens; return; }
       var list = Array.isArray(r.body)? r.body : [];
-      if(!list.length){ tb.innerHTML='<tr><td colspan="7" style="color:var(--faint)">还没有令牌</td></tr>'; return; }
+      if(!list.length){ tb.innerHTML='<tr><td colspan="9" style="color:var(--faint)">还没有令牌</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
+        var expired = t.expires_at!=null && Date.now()>t.expires_at;
         return '<tr><td>'+t.id+'</td>'
           + '<td style="font-weight:700">'+esc(t.name||'–')+'</td>'
           + '<td><span class="mono-token copyable" data-copy="'+esc(t.token)+'">'+esc(t.token)+'</span></td>'
-          + '<td><span class="dot '+(t.enabled?'d-active':'d-disabled')+'"></span>'+(t.enabled?'启用':'停用')+'</td>'
+          + '<td>'+(expired?'<span class="dot d-disabled"></span><span style="color:var(--red)">已过期</span>':'<span class="dot '+(t.enabled?'d-active':'d-disabled')+'"></span>'+(t.enabled?'启用':'停用'))+'</td>'
           + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
+          + '<td class="n">'+(t.rpm_limit==null?'∞':t.rpm_limit+'/min')+'</td>'
+          + '<td style="color:var(--faint)">'+(t.expires_at==null?'永久':(expired?'<span style="color:var(--red)">已过期</span>':fmtDate(t.expires_at)))+'</td>'
           + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td>'
           + '<td><button class="btn ghost small" data-del="'+t.id+'">删除</button></td></tr>';
       }).join('');
@@ -1363,71 +1503,113 @@ const PAGE = String.raw`<!doctype html>
           api('/me/tokens/'+b.getAttribute('data-del'),{method:'DELETE'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadMyTokens(); }).catch(function(){ b.disabled=false; });
         };
       });
-    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="7" style="color:var(--red)">网络错误</td></tr>'; });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="9" style="color:var(--red)">网络错误</td></tr>'; });
   }
   function mintMy(){
     var name=$('my-tname').value.trim();
-    var btn=$('my-mint'); btn.disabled=true;
+    var btn=$('my-mint'); btn.disabled=true; btn.textContent='生成中…';
     api('/me/tokens',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:name})})
-    .then(function(r){ btn.disabled=false; var o=$('my-mint-out'); o.style.display='block';
+    .then(function(r){ btn.disabled=false; btn.textContent='生成令牌'; var o=$('my-mint-out'); o.style.display='block';
       if(!r.ok){
         var msg=(r.body&&r.body.error&&r.body.error.message)||('错误 '+r.status);
         o.innerHTML='<span class="e">'+esc(msg)+'</span>'; return;
       }
-      o.innerHTML='新令牌(立即复制): <span class="k mono-token copyable" data-copy="'+esc(r.body.token)+'">'+esc(r.body.token)+'</span>';
-      bindCopy(o); $('my-tname').value=''; loadMyTokens();
-    }).catch(function(){ btn.disabled=false; });
+      o.innerHTML='新令牌(立即复制): <span class="k mono-token copyable" data-copy="'+esc(r.body.token)+'">'+esc(r.body.token)+'</span> <button class="btn ghost small" id="my-mint-close">我已复制 · 关闭</button>';
+      bindCopy(o); var cb=$('my-mint-close'); if(cb) cb.onclick=function(){ o.style.display='none'; o.innerHTML=''; }; $('my-tname').value=''; loadMyTokens();
+    }).catch(function(){ btn.disabled=false; btn.textContent='生成令牌'; });
   }
 
   // ---------------- docs (shared, static from models) ----------------
   function fillDocs(){
-    $('docs-endpoint').textContent = 'POST ' + base + '/v1/chat/completions';
-    $('docs-curl').innerHTML = curlSnippet(null);
     var model = (modelsCache && modelsCache[0] && modelsCache[0].id) || 'gemini-2.0-flash';
-    if($('docs-baseurl')) $('docs-baseurl').textContent = base + '/v1';
-    if($('docs-models-ep')) $('docs-models-ep').textContent = base + '/v1/models';
-    if($('docs-reqbody')) $('docs-reqbody').innerHTML = esc(
-      '{\n' +
-      '  "model": "' + model + '",\n' +
-      '  "messages": [{"role":"user","content":"hello"}],\n' +
-      '  "stream": false,\n' +
-      '  "fallback": true\n' +
-      '}'
-    );
-    $('docs-sdk').innerHTML = esc(
-      'from openai import OpenAI\n' +
-      'client = OpenAI(\n' +
-      '    base_url="' + base + '/v1",\n' +
-      '    api_key="<你的令牌>",\n' +
-      ')\n' +
-      'resp = client.chat.completions.create(\n' +
-      '    model="' + model + '",\n' +
-      '    messages=[{"role":"user","content":"hello"}],\n' +
-      ')\n' +
-      'print(resp.choices[0].message.content)'
-    );
+    function setEp(id, val){ var el=$(id); if(!el) return; el.textContent=val; el.setAttribute('data-copy', val); }
+    setEp('docs-endpoint', 'POST ' + base + '/v1/chat/completions');
+    setEp('docs-baseurl', base + '/v1');
+    setEp('docs-models-ep', base + '/v1/models');
+    setEp('docs-anthropic-ep', base + '/v1/messages');
+
+    var curlRaw = 'curl ' + base + '/v1/chat/completions \\\n'
+      + '  -H "Authorization: Bearer <你的令牌>" \\\n'
+      + '  -H "Content-Type: application/json" \\\n'
+      + '  -d \'{"model":"' + model + '","messages":[{"role":"user","content":"hello"}]}\'';
+    $('docs-curl').innerHTML = esc(curlRaw);
+
+    var reqRaw = '{\n'
+      + '  "model": "' + model + '",\n'
+      + '  "messages": [{"role":"user","content":"hello"}],\n'
+      + '  "stream": false,\n'
+      + '  "fallback": true\n'
+      + '}';
+    if($('docs-reqbody')) $('docs-reqbody').innerHTML = esc(reqRaw);
+
+    var sdkRaw = 'from openai import OpenAI\n'
+      + 'client = OpenAI(\n'
+      + '    base_url="' + base + '/v1",\n'
+      + '    api_key="<你的令牌>",\n'
+      + ')\n'
+      + 'resp = client.chat.completions.create(\n'
+      + '    model="' + model + '",\n'
+      + '    messages=[{"role":"user","content":"hello"}],\n'
+      + ')\n'
+      + 'print(resp.choices[0].message.content)';
+    $('docs-sdk').innerHTML = esc(sdkRaw);
+
+    var anthRaw = 'curl ' + base + '/v1/messages \\\n'
+      + '  -H "x-api-key: <你的令牌>" \\\n'
+      + '  -H "anthropic-version: 2023-06-01" \\\n'
+      + '  -H "Content-Type: application/json" \\\n'
+      + '  -d \'{"model":"' + model + '","max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}\'';
+    if($('docs-anthropic')) $('docs-anthropic').innerHTML = esc(anthRaw);
+
+    function bindBtn(id, raw){ var b=$(id); if(b) b.onclick=function(){ copy(raw, this); }; }
+    bindBtn('docs-curl-copy', curlRaw);
+    bindBtn('docs-reqbody-copy', reqRaw);
+    bindBtn('docs-sdk-copy', sdkRaw);
+    bindBtn('docs-anthropic-copy', anthRaw);
+
+    bindCopy($('sec-docs'));
   }
 
   // ---------------- admin: stats (overview + keys) ----------------
   function renderStats(s, tbodyId){
     var t=(s&&s.totals)||{active:0,cooldown:0,disabled:0};
     if($('t-active')){ $('t-active').textContent=t.active; $('t-cooldown').textContent=t.cooldown; $('t-disabled').textContent=t.disabled; }
-    var prov={}, order=['gemini','mistral','openrouter'];
-    order.forEach(function(p){ prov[p]={active:0,cooldown:0,disabled:0}; });
-    ((s&&s.byProviderStatus)||[]).forEach(function(r){ if(!prov[r.provider])prov[r.provider]={active:0,cooldown:0,disabled:0}; prov[r.provider][r.status]=r.n; });
+    var total=(t.active||0)+(t.cooldown||0)+(t.disabled||0);
+    // overview-only: one-line health verdict + 更新于 stamp in the 池子状态 card header
+    if(tbodyId==='ov-byprovider'){
+      var vd=$('ov-verdict');
+      if(vd){
+        if(total===0) vd.innerHTML='<span class="dot d-disabled"></span>池子为空';
+        else if((t.cooldown||0)+(t.disabled||0)===0) vd.innerHTML='<span class="dot d-active"></span>全部可用';
+        else vd.innerHTML='<span class="dot d-cooldown"></span>有 '+(t.cooldown||0)+' 个冷却 · '+(t.disabled||0)+' 个禁用';
+      }
+      var stp=$('ov-stamp'); if(stp) stp.textContent='更新于 '+fmtDate(Date.now());
+    }
     var html='';
-    Object.keys(prov).forEach(function(p){ var x=prov[p];
-      html += '<tr><td style="font-weight:700">'+p+'</td>'
-        +'<td class="n"><span class="dot d-active '+(x.active>0?'':'d-zero')+'"></span>'+x.active+'</td>'
-        +'<td class="n"><span class="dot d-cooldown '+(x.cooldown>0?'':'d-zero')+'"></span>'+x.cooldown+'</td>'
-        +'<td class="n"><span class="dot d-disabled '+(x.disabled>0?'':'d-zero')+'"></span>'+x.disabled+'</td></tr>';
-    });
-    if($(tbodyId)) $(tbodyId).innerHTML = html;
+    if(total===0){
+      // pool empty: don't render phantom all-zero gemini/mistral/openrouter rows
+      html='<tr><td colspan="4" class="kp-stats-empty" style="color:var(--faint);cursor:pointer">还没有 key · 去「Key 池」导入</td></tr>';
+    } else {
+      var prov={}, order=['gemini','mistral','openrouter'];
+      order.forEach(function(p){ prov[p]={active:0,cooldown:0,disabled:0}; });
+      ((s&&s.byProviderStatus)||[]).forEach(function(r){ if(!prov[r.provider])prov[r.provider]={active:0,cooldown:0,disabled:0}; prov[r.provider][r.status]=r.n; });
+      Object.keys(prov).forEach(function(p){ var x=prov[p];
+        html += '<tr><td style="font-weight:700">'+p+'</td>'
+          +'<td class="n"><span class="dot d-active '+(x.active>0?'':'d-zero')+'"></span>'+x.active+'</td>'
+          +'<td class="n"><span class="dot d-cooldown '+(x.cooldown>0?'':'d-zero')+'"></span>'+x.cooldown+'</td>'
+          +'<td class="n"><span class="dot d-disabled '+(x.disabled>0?'':'d-zero')+'"></span>'+x.disabled+'</td></tr>';
+      });
+    }
+    if($(tbodyId)){
+      $(tbodyId).innerHTML = html;
+      var ec=$(tbodyId).querySelector('.kp-stats-empty');
+      if(ec) ec.onclick=function(){ selectSection('keys'); };
+    }
   }
   function loadStats(prefix){
     var tbodyId = prefix==='ov' ? 'ov-byprovider' : 'keys-byprovider';
     if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" style="color:var(--faint)">加载中…</td></tr>';
-    function errTiles(){ ['t-active','t-cooldown','t-disabled'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); }
+    function errTiles(){ ['t-active','t-cooldown','t-disabled'].forEach(function(i){ if($(i)) $(i).textContent='–'; }); if(prefix==='ov'){ var vd=$('ov-verdict'); if(vd) vd.innerHTML=''; var stp=$('ov-stamp'); if(stp) stp.textContent=''; } }
     return api('/admin/keys').then(function(r){
       if(!r.ok){ if($(tbodyId)) $(tbodyId).innerHTML='<tr><td colspan="4" class="e">错误 '+r.status+'</td></tr>'; errTiles(); return; }
       renderStats(r.body, tbodyId);
@@ -1488,8 +1670,15 @@ const PAGE = String.raw`<!doctype html>
     var tb=$('users-body');
     if(tb) tb.innerHTML='<tr><td colspan="5" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/users').then(function(r){
-      if(!r.ok){ tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">加载失败 ('+r.status+') · <button class="btn ghost small" id="users-retry">重试</button></td></tr>'; var rb=$('users-retry'); if(rb) rb.onclick=loadUsers; return; }
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">加载失败 ('+r.status+') · <button class="btn ghost small" id="users-retry">重试</button></td></tr>'; var rb=$('users-retry'); if(rb) rb.onclick=loadUsers; var pb0=$('users-pending'); if(pb0) pb0.textContent=''; return; }
       var list = Array.isArray(r.body)? r.body : [];
+      var pb=$('users-pending');
+      if(pb){
+        var pend=list.filter(function(u){return u.status==='pending';}).length;
+        pb.className = pend>0 ? 'badge b-pending' : 'badge';
+        pb.style.color = pend>0 ? '' : 'var(--faint)';
+        pb.textContent = pend>0 ? ('待开通 '+pend) : '无待开通';
+      }
       if(!list.length){ tb.innerHTML='<tr><td colspan="5" style="color:var(--faint)">还没有用户</td></tr>'; return; }
       tb.innerHTML = list.map(function(u){
         var bcls = u.status==='approved'?'b-approved':(u.status==='blocked'?'b-blocked':'b-pending');
@@ -1515,42 +1704,53 @@ const PAGE = String.raw`<!doctype html>
         b.onclick=function(){ if(!confirm('停用该用户？其令牌会一并禁用。')) return; b.disabled=true;
           api('/admin/users/'+b.getAttribute('data-block')+'/block',{method:'POST'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadUsers(); }).catch(function(){ b.disabled=false; }); };
       });
-    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">网络错误</td></tr>'; });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="5" style="color:var(--red)">网络错误</td></tr>'; var pb1=$('users-pending'); if(pb1) pb1.textContent=''; });
   }
 
   // ---------------- admin: tokens ----------------
   function loadAdminTokens(){
     var tb=$('adm-token-list');
-    if(tb) tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">加载中…</td></tr>';
+    if(tb) tb.innerHTML='<tr><td colspan="10" style="color:var(--faint)">加载中…</td></tr>';
     return api('/admin/tokens').then(function(r){
-      if(!r.ok){ tb.innerHTML='<tr><td colspan="8"><span class="e">错误 '+r.status+'</span></td></tr>'; return; }
+      if(!r.ok){ tb.innerHTML='<tr><td colspan="10"><span class="e">错误 '+r.status+'</span></td></tr>'; return; }
       var list = Array.isArray(r.body)? r.body : [];
-      if(!list.length){ tb.innerHTML='<tr><td colspan="8" style="color:var(--faint)">还没有</td></tr>'; return; }
+      if(!list.length){ tb.innerHTML='<tr><td colspan="10" style="color:var(--faint)">还没有</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         return '<tr><td>'+t.id+'</td><td style="font-weight:700">'+esc(t.name||'–')+'</td>'
           + '<td><span class="badge">'+esc(ROLE_CN[t.role]||t.role)+'</span></td>'
+          + '<td>'+(t.owner_sub==null?'<span class="badge">全局</span>':'<span style="color:var(--faint)" title="'+esc(t.owner_sub)+'">…'+esc(String(t.owner_sub).slice(-8))+'</span>')+'</td>'
           + '<td class="n">'+t.used_requests+'/'+(t.quota_requests==null?'∞':t.quota_requests)+'</td>'
           + '<td class="n">'+(t.rpm_limit==null?'∞':t.rpm_limit)+'</td>'
           + '<td style="color:var(--faint)">'+(t.expires_at==null?'永久':fmtDate(t.expires_at))+'</td>'
           + '<td><span class="dot '+(t.enabled?'d-active':'d-disabled')+'"></span>'+(t.enabled?'启用':'停用')+'</td>'
-          + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td></tr>';
+          + '<td style="color:var(--faint)">'+fmtDate(t.created_at)+'</td>'
+          + '<td><button class="btn ghost small" data-del="'+t.id+'">删除</button></td></tr>';
       }).join('');
-    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="8"><span class="e">网络错误</span></td></tr>'; });
+      Array.prototype.forEach.call(tb.querySelectorAll('[data-del]'), function(b){
+        b.onclick = function(){
+          if(!confirm('删除该令牌？使用方将立即被拒。')) return;
+          b.disabled=true;
+          api('/admin/tokens/'+b.getAttribute('data-del'),{method:'DELETE'}).then(function(r){ if(!r.ok){ b.disabled=false; return; } loadAdminTokens(); }).catch(function(){ b.disabled=false; });
+        };
+      });
+    }).catch(function(){ if(tb) tb.innerHTML='<tr><td colspan="10"><span class="e">网络错误</span></td></tr>'; });
   }
   function mintAdmin(){
     var name=$('adm-tname').value.trim();
     var q=parseInt($('adm-quota').value,10), rpm=parseInt($('adm-rpm').value,10), exp=parseInt($('adm-exp').value,10);
+    var role=$('adm-role').value;
     var payload={name:name};
     if(q>0) payload.quota_requests=q;
     if(rpm>0) payload.rpm_limit=rpm;
     if(exp>0) payload.expires_in_days=exp;
-    var btn=$('adm-mint'); btn.disabled=true;
+    if(role==='admin'){ if(!confirm('发放管理员令牌？该令牌可访问管理接口。')) return; payload.role='admin'; }
+    var btn=$('adm-mint'); var lbl=btn.textContent; btn.disabled=true; btn.textContent='发放中…';
     api('/admin/tokens',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)})
-    .then(function(r){ btn.disabled=false; var o=$('adm-mint-out'); o.style.display='block';
+    .then(function(r){ btn.disabled=false; btn.textContent=lbl; var o=$('adm-mint-out'); o.style.display='block';
       if(!r.ok){ o.innerHTML='<span class="e">错误 '+r.status+'</span>'; return; }
       o.innerHTML='新令牌(立即复制): <span class="k mono-token copyable" data-copy="'+esc(r.body.token)+'">'+esc(r.body.token)+'</span>';
       bindCopy(o); $('adm-tname').value=''; $('adm-quota').value=''; $('adm-rpm').value=''; $('adm-exp').value=''; loadAdminTokens();
-    }).catch(function(){ btn.disabled=false; });
+    }).catch(function(){ btn.disabled=false; btn.textContent=lbl; });
   }
 
   // ---------------- wire static handlers ----------------
