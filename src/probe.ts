@@ -108,8 +108,23 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
     if (provider === "deepinfra") {
-      const r = await fetch("https://api.deepinfra.com/v1/openai/models", { headers: { authorization: `Bearer ${key}` } });
-      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+      // GET /models returns 200 even for an account with no payment method, so it
+      // lies about usability. Probe real inference: 402 = 欠费/需付款, 401/403 =
+      // dead key. DeepInfra exposes no balance API (only the web console does), so
+      // balance stays null — we can only surface the usable/unusable verdict.
+      const r = await fetch("https://api.deepinfra.com/v1/openai/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "meta-llama/Meta-Llama-3.1-8B-Instruct", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      if (r.status === 402) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "欠费/需付款" };
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        const arrears = /payment|insufficient|balance|欠费|prohibited/i.test(t);
+        return { alive: false, status: r.status, rateLimited: r.status === 429 && !arrears, balance: null, error: arrears ? "欠费/需付款" : `http ${r.status}` };
+      }
+      return { alive: true, status: r.status, rateLimited: false, balance: null };
     }
     if (provider === "fireworks") {
       const r = await fetch("https://api.fireworks.ai/inference/v1/models", { headers: { authorization: `Bearer ${key}` } });
