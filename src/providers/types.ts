@@ -53,6 +53,13 @@ const PROVIDER_PREFIXES: Provider[] = [
   "moonshot",
   "glm",
   "qwen",
+  "deepinfra",
+  "fireworks",
+  "cerebras",
+  "ai21",
+  "cohere",
+  "elevenlabs",
+  "stability",
 ];
 
 /** Map an OpenAI `model` string to the provider that should serve it. */
@@ -85,6 +92,11 @@ export function routeModelToProvider(model: string): Provider {
   ) {
     return "mistral";
   }
+  if (m.startsWith("jamba")) return "ai21";
+  if (m.startsWith("command")) return "cohere";
+  // deepinfra / fireworks / cerebras share generic llama-style slugs that
+  // collide with the openrouter catch-all, so they route only via an explicit
+  // "provider:model" prefix (handled above).
   // OpenRouter uses "vendor/model" slugs and serves as the catch-all.
   return "openrouter";
 }
@@ -105,6 +117,14 @@ export const FALLBACK_MODEL: Record<Provider, string> = {
   moonshot: "moonshot-v1-8k",
   glm: "glm-4-flash",
   qwen: "qwen-turbo",
+  deepinfra: "meta-llama/Meta-Llama-3.1-8B-Instruct",
+  fireworks: "accounts/fireworks/models/llama-v3p1-8b-instruct",
+  cerebras: "llama3.1-8b",
+  ai21: "jamba-mini",
+  cohere: "command-r",
+  // passthrough-only providers: no chat model, never used as a chat fallback.
+  elevenlabs: "",
+  stability: "",
 };
 
 /**
@@ -123,6 +143,13 @@ export const MAX_OUTPUT_TOKENS: Record<Provider, number> = {
   deepseek: 8192,
   groq: 8192,
   openrouter: 8192,
+  deepinfra: 8192,
+  fireworks: 8192,
+  cerebras: 8192,
+  ai21: 4096,
+  cohere: 4096,
+  elevenlabs: 4096,
+  stability: 4096,
 };
 
 /** Clamp a requested max_tokens to a provider's cap (no-op if unset/≤0). */

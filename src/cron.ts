@@ -21,6 +21,13 @@ const PROBE_PATH: Record<Provider, string> = {
   moonshot: "/v1/models",
   glm: "/models",
   qwen: "/v1/models",
+  deepinfra: "/models",
+  fireworks: "/models",
+  cerebras: "/models",
+  ai21: "/models",
+  cohere: "/models",
+  elevenlabs: "/v1/user",
+  stability: "/v1/user/account",
 };
 
 function probeIntervalMs(env: Env): number {

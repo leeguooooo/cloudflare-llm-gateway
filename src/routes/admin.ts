@@ -31,7 +31,7 @@ import {
 } from "../db";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "../keypool";
 import { runHealthCheck } from "../cron";
-import { probeKey, runCheckAll, probeModels } from "../probe";
+import { probeKey, runCheckAll, runSweep, sweepProgress, probeModels } from "../probe";
 import { getAdapter } from "../providers";
 import type { OpenAIChatRequest } from "../providers/types";
 
@@ -329,11 +329,25 @@ app.post("/probe-models", async (c) => {
   return c.json(await probeModels(c.env));
 });
 
-// POST /check-all-keys — probe every key in one go (capped for the subrequest
-// limit); revive the ones that pass, disable dead ones. (Outside /keys/ to avoid
+// POST /check-all-keys — one rotating sweep batch (back-compat alias of /sweep).
+// Used by the health-check workflow / external pingers. (Outside /keys/ to avoid
 // colliding with the /keys/:id param routes.)
 app.post("/check-all-keys", async (c) => {
   return c.json(await runCheckAll(c.env));
+});
+
+// POST /sweep — the scale-safe rotating probe. Each call probes one batch of
+// due keys and advances the cursor; `?all=1` first marks the WHOLE pool due so
+// successive batches re-validate everything (the 检测全部 button), otherwise it
+// only touches genuinely-stale keys (cheap background rotation for pingers/cron).
+app.post("/sweep", async (c) => {
+  const markAll = c.req.query("all") === "1";
+  return c.json(await runSweep(c.env, { markAll }));
+});
+
+// GET /sweep-status — cheap progress read for the UI bar: { total, due }.
+app.get("/sweep-status", async (c) => {
+  return c.json(await sweepProgress(c.env));
 });
 
 // POST /keys/:id/chat — chat directly through ONE specific key (bypasses the

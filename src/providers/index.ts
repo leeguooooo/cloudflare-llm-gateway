@@ -11,6 +11,13 @@ import groq from "./groq";
 import moonshot from "./moonshot";
 import glm from "./glm";
 import qwen from "./qwen";
+import deepinfra from "./deepinfra";
+import fireworks from "./fireworks";
+import cerebras from "./cerebras";
+import ai21 from "./ai21";
+import cohere from "./cohere";
+import elevenlabs from "./elevenlabs";
+import stability from "./stability";
 
 /** Return the adapter that serves `provider`. Throws on an unknown provider. */
 export function getAdapter(provider: Provider): ProviderAdapter {
@@ -33,6 +40,20 @@ export function getAdapter(provider: Provider): ProviderAdapter {
       return glm;
     case "qwen":
       return qwen;
+    case "deepinfra":
+      return deepinfra;
+    case "fireworks":
+      return fireworks;
+    case "cerebras":
+      return cerebras;
+    case "ai21":
+      return ai21;
+    case "cohere":
+      return cohere;
+    case "elevenlabs":
+      return elevenlabs;
+    case "stability":
+      return stability;
     default: {
       // Exhaustiveness guard: if `Provider` grows, tsc flags this branch.
       const exhaustive: never = provider;

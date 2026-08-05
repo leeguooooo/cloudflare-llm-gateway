@@ -9,7 +9,14 @@ export type Provider =
   | "groq"
   | "moonshot"
   | "glm"
-  | "qwen";
+  | "qwen"
+  | "deepinfra"
+  | "fireworks"
+  | "cerebras"
+  | "ai21"
+  | "cohere"
+  | "elevenlabs"
+  | "stability";
 
 export const PROVIDERS: Provider[] = [
   "gemini",
@@ -21,6 +28,13 @@ export const PROVIDERS: Provider[] = [
   "moonshot",
   "glm",
   "qwen",
+  "deepinfra",
+  "fireworks",
+  "cerebras",
+  "ai21",
+  "cohere",
+  "elevenlabs",
+  "stability",
 ];
 
 export interface Env {
@@ -72,6 +86,9 @@ export interface ApiKeyRow {
   total_fails: number;
   last_error: string | null;
   last_used_at: number | null;
+  /** epoch ms of the last liveness probe (NULL = never / due now). Separate from
+   *  last_used_at so the rotating sweep advances independently of real traffic. */
+  last_probed_at: number | null;
   cooldown_until: number | null;
   disabled_reason: string | null;
   created_at: number;

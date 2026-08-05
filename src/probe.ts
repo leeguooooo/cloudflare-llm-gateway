@@ -8,7 +8,7 @@
 
 import type { Env, Provider } from "./types";
 import { PROVIDERS } from "./types";
-import { listAllKeys, listKeysForProbe, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
+import { listDueForProbe, markProbed, markAllDueForProbe, getProbeProgress, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
 import { getAdapter } from "./providers";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "./keypool";
 
@@ -107,6 +107,41 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
       if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
       return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
     }
+    if (provider === "deepinfra") {
+      const r = await fetch("https://api.deepinfra.com/v1/openai/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "fireworks") {
+      const r = await fetch("https://api.fireworks.ai/inference/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "cerebras") {
+      const r = await fetch("https://api.cerebras.ai/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "cohere") {
+      const r = await fetch("https://api.cohere.com/v1/models", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "ai21") {
+      const r = await fetch("https://api.ai21.com/studio/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "jamba-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      });
+      if (r.status === 401 || r.status === 403) return { alive: false, status: r.status, rateLimited: false, balance: null, error: "invalid key" };
+      // 400/422 = auth ok, body quibble; still a live key.
+      const alive = r.ok || r.status === 400 || r.status === 422 || r.status === 429;
+      return { alive, status: r.status, rateLimited: r.status === 429, balance: null, error: alive ? undefined : `http ${r.status}` };
+    }
+    if (provider === "elevenlabs") {
+      const r = await fetch("https://api.elevenlabs.io/v1/user", { headers: { "xi-api-key": key } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
+    if (provider === "stability") {
+      const r = await fetch("https://api.stability.ai/v1/user/account", { headers: { authorization: `Bearer ${key}` } });
+      return { alive: r.ok, status: r.status, rateLimited: r.status === 429, balance: null, error: r.ok ? undefined : `http ${r.status}` };
+    }
     // gemini — /v1beta/models is NOT rate-limited and lies about usability, so
     // probe the actual generateContent path with a 1-token request.
     const r = await fetch(
@@ -136,16 +171,49 @@ export async function probeKey(provider: Provider, key: string): Promise<ProbeRe
   }
 }
 
-/** Probe every key (capped for the subrequest limit): revive healthy, disable dead. */
-export async function runCheckAll(
+/** Default minutes before a probed key becomes "due" for another probe. */
+const DEFAULT_PROBE_INTERVAL_MINUTES = 60;
+
+function probeIntervalMs(env: Env): number {
+  const raw = env.PROBE_INTERVAL_MINUTES;
+  const m = raw != null ? Number.parseInt(raw, 10) : NaN;
+  return (Number.isFinite(m) && m > 0 ? m : DEFAULT_PROBE_INTERVAL_MINUTES) * 60000;
+}
+
+export interface SweepResult {
+  checked: number;
+  alive: number;
+  dead: number;
+  /** total keys in the pool */
+  total: number;
+  /** keys still due for a probe after this batch (0 = pool fully swept) */
+  due: number;
+  /** true while keys remain due (more batches needed to cover the pool) */
+  capped: boolean;
+}
+
+/**
+ * One rotating sweep batch — the scale-safe primitive that both the
+ * 检测全部 button (polled) and the external pinger / cron tick call.
+ *
+ * A single Worker invocation can't probe an unbounded pool (free tier caps
+ * outbound subrequests at ~50), so each call probes at most `limit` keys that
+ * are *due* (never probed, or probed > PROBE_INTERVAL ago), least-recently-
+ * probed first, spread across providers. It advances `last_probed_at` for the
+ * whole batch so successive calls roll through the rest. With `markAll`, every
+ * key is first marked due (the button) so the next batches re-validate the
+ * entire pool; without it, only genuinely-stale keys are touched (cheap
+ * background rotation — active keys are validated for free by real traffic).
+ */
+export async function runSweep(
   env: Env,
-  limit = 48
-): Promise<{ checked: number; alive: number; dead: number; capped: boolean; total: number }> {
-  // Worker free tier caps outbound subrequests (~50/request), so probe at most
-  // `limit` keys per run — the LEAST-recently-touched first, so successive runs
-  // (button + the periodic auto health-check) rotate through the whole pool.
-  const total = (await listAllKeys(env)).length;
-  const subset = await listKeysForProbe(env, limit);
+  opts: { markAll?: boolean; limit?: number } = {}
+): Promise<SweepResult> {
+  const limit = opts.limit ?? 48;
+  if (opts.markAll) await markAllDueForProbe(env);
+  const now = Date.now();
+  const intervalMs = probeIntervalMs(env);
+  const subset = await listDueForProbe(env, { limit, intervalMs, now });
   const results = await Promise.all(
     subset.map(async (k) => {
       try {
@@ -179,8 +247,23 @@ export async function runCheckAll(
       }
     })
   );
+  // Advance the cursor for the whole batch (alive or dead) so the next sweep
+  // rotates to the next slice instead of re-probing these.
+  await markProbed(env, subset.map((k) => k.id), now);
   const alive = results.filter(Boolean).length;
-  return { checked: results.length, alive, dead: results.length - alive, capped: total > subset.length, total };
+  const { total, due } = await getProbeProgress(env, intervalMs, now);
+  return { checked: results.length, alive, dead: results.length - alive, total, due, capped: due > 0 };
+}
+
+/** Back-compat alias: one rotating batch. Used by the cron tick and the
+ *  /admin/check-all-keys endpoint (external pingers / health-check workflow). */
+export function runCheckAll(env: Env): Promise<SweepResult> {
+  return runSweep(env, {});
+}
+
+/** Cheap read for the UI progress bar / pinger: { total, due }. */
+export function sweepProgress(env: Env): Promise<{ total: number; due: number }> {
+  return getProbeProgress(env, probeIntervalMs(env), Date.now());
 }
 
 /**

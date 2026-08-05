@@ -457,7 +457,7 @@ const PAGE = String.raw`<!doctype html>
           <label>provider:key — 一行一个</label>
           <textarea id="keys" spellcheck="false" placeholder="gemini:AIzaSy...&#10;openrouter:sk-or-v1-...&#10;mistral:..."></textarea>
           <div style="margin-top:13px"><button class="btn primary" id="importBtn">导入并自动上架</button></div>
-          <div class="hint">支持 <code>gemini</code> <code>mistral</code> <code>openrouter</code>。重复自动跳过；坏 key 首次调用即自动禁用。</div>
+          <div class="hint">支持 <code>gemini</code> <code>openai</code> <code>mistral</code> <code>openrouter</code> <code>deepseek</code> <code>groq</code> <code>moonshot</code> <code>glm</code> <code>qwen</code> <code>deepinfra</code> <code>fireworks</code> <code>cerebras</code> <code>ai21</code> <code>cohere</code> <code>elevenlabs</code> <code>stability</code>。重复自动跳过；坏 key 首次调用即自动禁用。</div>
           <div class="out" id="importOut" style="display:none"></div>
         </div>
         <div class="card r1">
@@ -1508,19 +1508,44 @@ const PAGE = String.raw`<!doctype html>
   }
 
   // ---------------- admin: per-key list ----------------
+  // Scale-safe 检测全部: the backend probes the pool in rotating batches (~48/
+  // call, Worker subrequest cap). The button marks the whole pool due (?all=1),
+  // then drains batches while showing progress. It's non-blocking — closing the
+  // page is fine, the external pinger/cron keeps draining in the background.
+  var keylistSweeping = false;
+  function renderSweepProgress(done, total){
+    var out=$('keylist-checkall-out'); if(!out) return;
+    var pct = total>0 ? Math.min(100, Math.round(done*100/total)) : 0;
+    var W=24, fill=Math.round(pct*W/100);
+    var bar='['+Array(fill+1).join('█')+Array(W-fill+1).join('·')+']';
+    out.innerHTML='检测中 '+bar+' '+done+' / '+total+'(可关闭页面,后台继续)';
+  }
   function checkAllKeys(){
     var btn=$('keylist-checkall'), out=$('keylist-checkall-out');
-    if(btn) btn.disabled=true; if(out) out.textContent='检测中…(几十个 key 需要十几秒)';
-    api('/admin/check-all-keys',{method:'POST'}).then(function(r){
-      if(btn) btn.disabled=false; var b=r.body||{};
-      if(out){
-        var base='<span style="color:var(--green)">可用 '+(b.alive||0)+'</span> / 不可用 '+(b.dead||0);
-        out.innerHTML = b.capped
-          ? base+' · 本轮检测 '+(b.checked||0)+'/'+(b.total||0)+'(单次上限,其余下轮自动轮替)'
-          : base;
-      }
+    if(keylistSweeping){ keylistSweeping=false; if(btn) btn.textContent='检测全部'; return; }
+    keylistSweeping=true; if(btn) btn.textContent='停止检测';
+    if(out) out.textContent='标记全部待检测…';
+    var total=0, lastDue=-1, stall=0, batches=0;
+    function drain(markAll){
+      if(!keylistSweeping) return Promise.resolve();
+      return api('/admin/sweep'+(markAll?'?all=1':''),{method:'POST'}).then(function(r){
+        var b=r.body||{}; total=b.total||total;
+        var due=(b.due==null?0:b.due); renderSweepProgress(Math.max(0,total-due), total);
+        batches++; if(batches%5===0) loadKeyList();           // periodic list refresh
+        if(due===lastDue){ if(++stall>=2) return; } else { stall=0; lastDue=due; }
+        if(due>0 && keylistSweeping){
+          return new Promise(function(res){ setTimeout(res,300); }).then(function(){ return drain(false); });
+        }
+      });
+    }
+    drain(true).then(function(){
+      keylistSweeping=false; if(btn) btn.textContent='检测全部';
+      if(out) out.textContent='已检测全部 '+(total||'')+' 个 key,见下方状态';
       loadKeyList();
-    }).catch(function(){ if(btn) btn.disabled=false; if(out) out.textContent='出错'; });
+    }).catch(function(){
+      keylistSweeping=false; if(btn) btn.textContent='检测全部';
+      if(out) out.textContent='出错(后台轮转仍会继续)'; loadKeyList();
+    });
   }
   var keylistShowDisabled = false;
   function loadKeyList(){

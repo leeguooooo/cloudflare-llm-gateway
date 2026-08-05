@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_api_keys (
   total_fails       INTEGER NOT NULL DEFAULT 0,
   last_error        TEXT,
   last_used_at      INTEGER,                           -- epoch ms
+  last_probed_at    INTEGER,                           -- epoch ms of last liveness probe (NULL = due now)
   cooldown_until    INTEGER,                           -- epoch ms
   disabled_reason   TEXT,
   created_at        INTEGER NOT NULL,                  -- epoch ms
@@ -20,6 +21,8 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_api_keys (
 
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_keys_provider_status ON keypool_gateway_api_keys(provider, status);
 CREATE INDEX IF NOT EXISTS keypool_gateway_idx_keys_status_cooldown ON keypool_gateway_api_keys(status, cooldown_until);
+-- Rotating-sweep cursor: pick the least-recently-probed keys first, at scale.
+CREATE INDEX IF NOT EXISTS keypool_gateway_idx_keys_probed ON keypool_gateway_api_keys(last_probed_at);
 
 CREATE TABLE IF NOT EXISTS keypool_gateway_access_tokens (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
