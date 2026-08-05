@@ -1593,12 +1593,16 @@ const PAGE = String.raw`<!doctype html>
         var cf = (k.consecutive_fails>0) ? ' <span style="color:var(--red)">(连败 '+k.consecutive_fails+'/3)</span>' : '';
         var cool = (k.status==='cooldown' && k.cooldown_until) ? ('冷却至 '+fmtDate(k.cooldown_until)) : '';
         var luTitle = '最近使用 '+(k.last_used_at ? fmtDate(k.last_used_at) : '从未使用');
+        // Stored upstream balance (openrouter/deepseek expose one) — show on load
+        // so operators don't have to click 测活 for each. 测活 refreshes it live.
+        var balStr = (k.balance_remaining!=null)
+          ? '余 '+(Math.round(k.balance_remaining*100)/100)+' '+(k.balance_unit||'') : '';
         return '<tr data-id="'+k.id+'">'
           +'<td><span class="dot '+sd+'" title="'+sLabel+'"></span>'+esc(k.provider)+proj+'</td>'
-          +'<td style="font-family:ui-monospace,monospace;font-size:12.5px">'+esc(k.masked)+'</td>'
+          +'<td style="font-family:ui-monospace,monospace;font-size:12.5px;white-space:nowrap">'+esc(k.masked)+' <button class="btn ghost small kl-copy" title="复制完整 key">复制</button></td>'
           +'<td class="n">'+k.total_requests+' / '+k.total_fails+cf+'</td>'
           +'<td class="kl-err" style="max-width:180px;color:var(--faint);font-size:12px;overflow:hidden;text-overflow:ellipsis"'+((cool||reason)?' title="'+esc(cool||String(reason))+'"':'')+'>'+(cool?'<span style="color:var(--amber)">'+esc(cool)+'</span>':err)+'</td>'
-          +'<td class="kl-result" style="font-size:12.5px;white-space:nowrap"></td>'
+          +'<td class="kl-result" style="font-size:12.5px;white-space:nowrap">'+(balStr?'<span style="color:var(--faint)" title="上次探测余额">'+esc(balStr)+'</span>':'')+'</td>'
           +'<td style="color:var(--faint);font-size:12px;white-space:nowrap" title="'+esc((k.created_at?'添加于 '+new Date(k.created_at).toLocaleString()+' · ':'')+luTitle)+'">'+(k.created_at?fmtDate(k.created_at):'–')+'</td>'
           +'<td style="white-space:nowrap"><button class="btn ghost small kl-check">测活</button> '+toggle+' <button class="btn ghost small kl-del">删</button></td>'
           +'</tr>';
@@ -1627,6 +1631,7 @@ const PAGE = String.raw`<!doctype html>
             } else { res.innerHTML='<span style="color:var(--red)">不可用 '+(b.status||'')+'</span>'; }
           }).catch(function(){ chk.disabled=false; res.innerHTML='<span style="color:var(--red)">出错</span>'; });
         };
+        var cp=tr.querySelector('.kl-copy'); if(cp) cp.onclick=function(){ cp.disabled=true; var o=cp.textContent; api('/admin/keys/'+id+'/reveal').then(function(r){ cp.disabled=false; if(r.ok && r.body && r.body.api_key){ copy(r.body.api_key, cp); } else { cp.textContent='失败'; setTimeout(function(){cp.textContent=o;},900); } }).catch(function(){ cp.disabled=false; cp.textContent='失败'; setTimeout(function(){cp.textContent=o;},900); }); };
         var en=tr.querySelector('.kl-enable'); if(en) en.onclick=function(){ api('/admin/keys/'+id+'/enable',{method:'POST'}).then(loadKeyList); };
         var dis=tr.querySelector('.kl-disable'); if(dis) dis.onclick=function(){ api('/admin/keys/'+id+'/disable',{method:'POST'}).then(loadKeyList); };
         var del=tr.querySelector('.kl-del'); if(del) del.onclick=function(){ if(confirm('删除这个 key?不可恢复')) api('/admin/keys/'+id,{method:'DELETE'}).then(loadKeyList); };

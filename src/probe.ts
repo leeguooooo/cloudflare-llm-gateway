@@ -8,7 +8,7 @@
 
 import type { Env, Provider } from "./types";
 import { PROVIDERS } from "./types";
-import { listDueForProbe, markProbed, markAllDueForProbe, getProbeProgress, reactivateKey, applyOutcome, setKeyProjectId, setModelStatus, oneActiveKey } from "./db";
+import { listDueForProbe, markProbed, markAllDueForProbe, getProbeProgress, reactivateKey, applyOutcome, setKeyProjectId, setKeyBalance, setModelStatus, oneActiveKey } from "./db";
 import { getAdapter } from "./providers";
 import { cooldownMinutes, MAX_CONSECUTIVE_FAILS } from "./keypool";
 
@@ -219,6 +219,9 @@ export async function runSweep(
       try {
         const r = await probeKey(k.provider, k.api_key);
         if (r.projectId) await setKeyProjectId(env, k.id, r.projectId);
+        if (r.balance && r.balance.remaining != null) {
+          await setKeyBalance(env, k.id, r.balance.remaining, r.balance.unit);
+        }
         if (r.alive && !r.rateLimited) {
           // Healthy: ensure active AND clear any stale last_error (e.g. a glm key
           // that errored on a paid model but works for the free one).

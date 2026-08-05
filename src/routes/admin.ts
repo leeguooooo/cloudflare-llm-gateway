@@ -16,6 +16,7 @@ import {
   disableTokensByOwner,
   listAllKeys,
   getKeyById,
+  setKeyBalance,
   deleteKey,
   deleteToken,
   prunePermanentlyDeadKeys,
@@ -314,8 +315,32 @@ app.get("/keys/list", async (c) => {
       cooldown_until: k.cooldown_until,
       created_at: k.created_at,
       project_id: k.project_id,
+      balance_remaining: k.balance_remaining,
+      balance_unit: k.balance_unit,
     })),
   });
+});
+
+// GET /keys/:id/reveal — full plaintext key for admin copy. The whole /admin
+// router is behind requireAdmin, so this is admin-only. Fetched on-demand per
+// click so the list payload stays masked (full keys never sit in the page).
+app.get("/keys/:id/reveal", async (c) => {
+  const id = parseId(c.req.param("id"));
+  if (id === null) {
+    return c.json(
+      { error: { message: "invalid key id", type: "invalid_request_error" } },
+      400
+    );
+  }
+  const row = await c.env.DB.prepare(
+    `SELECT api_key FROM keypool_gateway_api_keys WHERE id = ?`
+  )
+    .bind(id)
+    .first<{ api_key: string }>();
+  if (!row) {
+    return c.json({ error: { message: "key not found", type: "not_found" } }, 404);
+  }
+  return c.json({ id, api_key: row.api_key });
 });
 
 // GET /models-status — per-model availability (probed by /probe-models).
@@ -409,6 +434,10 @@ app.post("/keys/:id/check", async (c) => {
   // any stale last_error (so a "可用" key no longer shows an old error).
   if (result.alive && !result.rateLimited) {
     await reactivateKey(c.env, id);
+  }
+  // Persist the freshly-probed balance so the list shows it without re-probing.
+  if (result.balance && result.balance.remaining != null) {
+    await setKeyBalance(c.env, id, result.balance.remaining, result.balance.unit);
   }
   return c.json({ id, provider: row.provider, ...result });
 });

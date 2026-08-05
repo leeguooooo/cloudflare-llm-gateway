@@ -94,6 +94,10 @@ export interface ApiKeyRow {
   created_at: number;
   /** Provider account/project identifier (e.g. gemini Google project number). */
   project_id: string | null;
+  /** Last-probed upstream balance (NULL = unknown / provider exposes none). */
+  balance_remaining: number | null;
+  /** Unit for `balance_remaining`, e.g. "USD" | "credits". */
+  balance_unit: string | null;
 }
 
 /** Result of evaluating a single upstream call against one key. */

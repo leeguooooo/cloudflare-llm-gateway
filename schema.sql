@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS keypool_gateway_api_keys (
   disabled_reason   TEXT,
   created_at        INTEGER NOT NULL,                  -- epoch ms
   project_id        TEXT,                              -- e.g. gemini Google project number
+  balance_remaining REAL,                              -- last-probed upstream balance (NULL = unknown / provider has no balance API)
+  balance_unit      TEXT,                              -- e.g. "USD" | "credits"
   UNIQUE(provider, api_key)
 );
 
