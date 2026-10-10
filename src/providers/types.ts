@@ -140,7 +140,7 @@ export const MAX_OUTPUT_TOKENS: Record<Provider, number> = {
   mistral: 8192,
   moonshot: 8192,
   openai: 16384,
-  deepseek: 8192,
+  deepseek: 65536, // deepseek-chat now serves deepseek-flash: accepts up to 393216 (2026-10-11)
   groq: 8192,
   openrouter: 8192,
   deepinfra: 8192,
@@ -152,10 +152,17 @@ export const MAX_OUTPUT_TOKENS: Record<Provider, number> = {
   stability: 4096,
 };
 
-/** Clamp a requested max_tokens to a provider's cap (no-op if unset/≤0). */
-export function clampMaxTokens(provider: Provider, maxTokens: number | undefined): number | undefined {
+/** Per-model caps that differ from the provider's (thinking models spend
+ *  output tokens on reasoning, so they need far more room). */
+const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "glm-4.5-flash": 32768, // upstream accepts up to 98304 (2026-10-11)
+};
+
+/** Clamp a requested max_tokens to the model's / provider's cap (no-op if unset/≤0). */
+export function clampMaxTokens(provider: Provider, maxTokens: number | undefined, model?: string): number | undefined {
   if (typeof maxTokens !== "number" || maxTokens <= 0) return maxTokens;
-  return Math.min(maxTokens, MAX_OUTPUT_TOKENS[provider]);
+  const cap = (model && MODEL_MAX_OUTPUT_TOKENS[stripProviderPrefix(model)]) || MAX_OUTPUT_TOKENS[provider];
+  return Math.min(maxTokens, cap);
 }
 
 /** Strip a leading "provider:" routing prefix before sending upstream. */

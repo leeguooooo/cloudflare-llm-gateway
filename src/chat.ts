@@ -179,7 +179,7 @@ export async function serveChat(
       const useModel = auto ? (pick[prov] as string) : prov === provider ? body.model : FALLBACK_MODEL[prov];
       // Clamp max_tokens to the provider's cap: an over-limit value makes some
       // upstreams reject (or emit an empty SSE stream) instead of serving.
-      const clamped = clampMaxTokens(prov, (body as { max_tokens?: number }).max_tokens);
+      const clamped = clampMaxTokens(prov, (body as { max_tokens?: number }).max_tokens, useModel);
       // Thinking params are provider-specific, so translate per attempt
       // (a fallback can land on a provider with a different dialect).
       const reqBody: OpenAIChatRequest = applyReasoning(

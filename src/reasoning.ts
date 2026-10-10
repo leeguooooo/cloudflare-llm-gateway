@@ -103,8 +103,14 @@ export function applyReasoning(provider: Provider, body: OpenAIChatRequest): Ope
   const out = { ...body } as Record<string, unknown>;
   const effort = normEffort(out.reasoning_effort);
   delete out.reasoning_effort;
-  if (!effort) return out as OpenAIChatRequest;
   const model = String(out.model || "").toLowerCase();
+  if (!effort) {
+    // glm-4.5+ thinks by default (22s on a one-line question, verified): when
+    // the caller didn't ask for thinking — e.g. "auto" landed here — turn it
+    // off so latency matches what a non-thinking request expects.
+    if (provider === "glm" && canReason(model)) out.thinking = { type: "disabled" };
+    return out as OpenAIChatRequest;
+  }
 
   switch (provider) {
     case "deepseek":
