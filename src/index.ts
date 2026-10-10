@@ -2,6 +2,7 @@
  * Worker entrypoint: Hono app wiring + `export default { fetch, scheduled }`.
  *
  * Mounts the admin sub-app at `/admin`, the OpenAI-compatible sub-app at `/v1`,
+ * the Gemini-native translation sub-app at `/v1beta`,
  * and the native passthrough sub-app at the root (it self-prefixes its routes
  * with `/gemini/*`, `/mistral/*`, `/openrouter/*`). `GET /healthz` is unauthed
  * and returns a stats summary. The cron trigger runs the key-pool health check.
@@ -15,6 +16,7 @@ import auth from "./oidc";
 import admin from "./routes/admin";
 import me from "./routes/me";
 import openai from "./routes/openai";
+import gemini from "./routes/gemini";
 import passthrough from "./routes/passthrough";
 import stripe from "./routes/stripe";
 
@@ -48,6 +50,7 @@ app.route("/auth", auth);
 app.route("/admin", admin);
 app.route("/me", me);
 app.route("/v1", openai);
+app.route("/v1beta", gemini);
 app.route("/", passthrough);
 
 const scheduled = (
@@ -60,7 +63,20 @@ const scheduled = (
   ctx.waitUntil(runCheckAll(env).then(() => probeModels(env)));
 };
 
+// Behind Alibaba Cloud ESA (mainland China) the gateway is reached as ai-origin.leeguoo.com.
+// Put the public hostname back first so OAuth callbacks and cookies stay on ai.leeguoo.com.
+// Managed with ~/github.com/leeguoo-edge.
+const ORIGIN_ALIAS = "ai-origin.leeguoo.com";
+const PUBLIC_HOST = "ai.leeguoo.com";
+
 export default {
-  fetch: app.fetch,
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const url = new URL(request.url);
+    if (url.hostname === ORIGIN_ALIAS) {
+      url.hostname = PUBLIC_HOST;
+      request = new Request(url, request);
+    }
+    return app.fetch(request, env, ctx);
+  },
   scheduled,
 };

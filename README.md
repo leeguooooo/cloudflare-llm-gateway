@@ -14,6 +14,7 @@ you get a built-in admin/consumer console — all on the free tier.
 ## Features
 
 - **9 providers, OpenAI-compatible** — Gemini, Mistral, OpenRouter, OpenAI, DeepSeek, Groq, Moonshot (Kimi), GLM (Zhipu), Qwen (DashScope). One `POST /v1/chat/completions` + `GET /v1/models`; route by model name or an explicit `provider:model` prefix. Native passthrough at `/gemini/*`, `/mistral/*`, … too.
+- **Four client protocols on one pool** — OpenAI Chat (`/v1/chat/completions`), OpenAI Responses (`/v1/responses`), Anthropic Messages (`/v1/messages`) and Gemini (`/v1beta/models/{model}:generateContent` / `:streamGenerateContent`). Each is translated onto the same pool, so any pooled model works from any client; `/v1/models` is readable by both OpenAI and Anthropic SDKs and `/v1beta/models` lists the same models in Gemini format.
 - **Self-healing key pool** — round-robin across active keys; `401/403`/arrears → auto-disable, `429`/quota → cooldown with **progressive backoff**, success → revive. Liveness probes use a real 1-token call (not a `/models` endpoint that lies about suspended/throttled accounts).
 - **Auto-fallback** — if the chosen provider is down/throttled, the request is transparently served by another provider with live keys (response carries `X-KeyPool-Provider/Model/Fallback`); opt out per request with `{"fallback": false}`. Callers never get a 503.
 - **Model-level availability** — models that a key can't actually serve (paid-only, not-found) are probed and hidden from `GET /v1/models`, so users only pick models that work.
