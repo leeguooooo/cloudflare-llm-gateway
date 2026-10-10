@@ -27,6 +27,61 @@ import {
 /** Virtual model id: let the gateway pick whichever provider can serve now. */
 export const AUTO_MODEL = "auto";
 
+/**
+ * "auto" preference, strongest tool-capable chat models first. Agent clients
+ * (Pi, Codex, Claude Code) send long system prompts plus many tools; a small
+ * model accepts the request but answers badly, so capability beats price here.
+ * Pooled models missing from this list are tried after it, at each provider's
+ * default model.
+ */
+const AUTO_RANK: string[] = [
+  "gpt-4o",
+  "deepseek-chat",
+  "qwen-max",
+  "gemini-1.5-pro",
+  "mistral-large-latest",
+  "deepseek/deepseek-chat",
+  "gemini-2.0-flash",
+  "llama-3.3-70b-versatile",
+  "meta-llama/llama-3.3-70b-instruct",
+  "command-r-plus",
+  "qwen-plus",
+  "moonshot-v1-128k",
+  "codestral-latest",
+  "gpt-4o-mini",
+  "mistral-small-latest",
+  "moonshot-v1-32k",
+  "command-r",
+  "qwen-turbo",
+  "open-mistral-nemo",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash",
+  "glm-4-flash",
+  "llama-3.1-8b-instant",
+];
+
+/** Providers to try for "auto", each with its best servable model, best first. */
+async function autoCandidates(env: Env, avail: Set<string>): Promise<Array<{ p: Provider; model: string }>> {
+  const blocked = await availableModelSet(env);
+  const best = new Map<Provider, { model: string; rank: number }>();
+  for (const p of PROVIDERS) {
+    if (!avail.has(p)) continue;
+    const models = getAdapter(p).models().filter((m) => m && !blocked.has(m));
+    let pick: { model: string; rank: number } | null = null;
+    for (const m of models) {
+      const r = AUTO_RANK.indexOf(m);
+      if (r >= 0 && (!pick || r < pick.rank)) pick = { model: m, rank: r };
+    }
+    if (!pick) {
+      const fb = FALLBACK_MODEL[p];
+      if (fb && !blocked.has(fb)) pick = { model: fb, rank: AUTO_RANK.length };
+      else if (models.length) pick = { model: models[0], rank: AUTO_RANK.length };
+    }
+    if (pick) best.set(p, pick);
+  }
+  return [...best.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([p, v]) => ({ p, model: v.model }));
+}
+
 export function isAutoModel(model: string): boolean {
   return (model || "").trim().toLowerCase() === AUTO_MODEL;
 }
@@ -70,27 +125,20 @@ export async function serveChat(
     if ("fallback" in body) delete (body as { fallback?: unknown }).fallback;
     const avail = await providersWithActiveKeys(env);
     let order: Provider[] = [provider];
-    // Per-provider model to send. "auto" picks each provider's default chat
-    // model (or its first model not marked unavailable).
+    // Per-provider model to send when serving "auto".
     const pick: Partial<Record<Provider, string>> = {};
     if (auto) {
-      const blocked = await availableModelSet(env);
-      for (const p of PROVIDERS) {
-        if (!avail.has(p)) continue;
-        const models = [FALLBACK_MODEL[p], ...getAdapter(p).models()].filter((m) => m && !blocked.has(m));
-        if (models.length) pick[p] = models[0];
-      }
-      order = [];
-    }
-    if (allowFallback || auto) {
-      const others = PROVIDERS.filter((p) => avail.has(p) && (auto ? !!pick[p] : p !== provider));
+      const cands = await autoCandidates(env, avail);
+      for (const c of cands) pick[c.p] = c.model;
+      order = cands.map((c) => c.p);
+      if (!allowFallback) order = order.slice(0, 1);
+    } else if (allowFallback) {
+      const others = PROVIDERS.filter((p) => p !== provider && avail.has(p));
       const priced = await Promise.all(
-        others.map(async (p) => ({ p, price: (await priceForModel(env, pick[p] ?? FALLBACK_MODEL[p])).output }))
+        others.map(async (p) => ({ p, price: (await priceForModel(env, FALLBACK_MODEL[p])).output }))
       );
       priced.sort((a, b) => a.price - b.price);
       for (const x of priced) order.push(x.p);
-      // "auto" with fallback disabled still gets one provider: the cheapest.
-      if (auto && !allowFallback) order = order.slice(0, 1);
     }
 
     let res: Response | null = null;
