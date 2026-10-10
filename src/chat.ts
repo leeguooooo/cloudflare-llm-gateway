@@ -82,6 +82,23 @@ async function autoCandidates(env: Env, avail: Set<string>): Promise<Array<{ p: 
   return [...best.entries()].sort((a, b) => a[1].rank - b[1].rank).map(([p, v]) => ({ p, model: v.model }));
 }
 
+/**
+ * Collapse text-only content-part arrays (`[{type:"text",text}]`) into a plain
+ * string. Agent clients (Pi, Codex …) send user/system/tool content as parts,
+ * but several upstreams (GLM, among others) silently drop a parts array on a
+ * text model — the request "succeeds" and the model never sees the message.
+ * Arrays holding images or other non-text parts are left untouched.
+ */
+export function flattenTextParts(body: OpenAIChatRequest): void {
+  for (const m of body.messages ?? []) {
+    const c: unknown = m.content;
+    if (!Array.isArray(c) || c.length === 0) continue;
+    const parts = c as Array<{ type?: string; text?: unknown }>;
+    if (!parts.every((p) => p && (p.type === "text" || p.type === "input_text") && typeof p.text === "string")) continue;
+    m.content = parts.map((p) => p.text as string).join("\n");
+  }
+}
+
 export function isAutoModel(model: string): boolean {
   return (model || "").trim().toLowerCase() === AUTO_MODEL;
 }
@@ -97,6 +114,7 @@ export async function serveChat(
   body: OpenAIChatRequest,
   caller: Caller
 ): Promise<Response> {
+  flattenTextParts(body);
   const auto = isAutoModel(body.model);
   const provider = routeModelToProvider(body.model);
   const promptChars = (body.messages ?? []).reduce((sum, m) => {
