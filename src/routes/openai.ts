@@ -7,7 +7,7 @@ import type { OpenAIChatRequest } from "../providers/types";
 import { getAdapter } from "../providers";
 import { requireUser, resolveCaller } from "../auth";
 import { checkTokenLimits, providersWithActiveKeys, availableModelSet, getBalanceMicro, getChargeTotalMicro } from "../db";
-import { serveChat } from "../chat";
+import { serveChat, AUTO_MODEL } from "../chat";
 import { anthropicToOpenAI, openAIToAnthropic, openAIStreamToAnthropic } from "../anthropic";
 import type { AnthropicRequest } from "../anthropic";
 import { responsesToChat, chatToResponses, chatStreamToResponses } from "../responses";
@@ -26,6 +26,8 @@ export async function servableModels(env: Env): Promise<Array<{ id: string; owne
   // available by default, so it won't appear here).
   const blocked = await availableModelSet(env);
   const out: Array<{ id: string; owner: string }> = [];
+  // Virtual "auto" model first: routed to whichever provider can serve now.
+  if (avail.size) out.push({ id: AUTO_MODEL, owner: "keypool" });
   for (const provider of PROVIDERS) {
     if (!avail.has(provider)) continue;
     for (const id of getAdapter(provider).models()) {

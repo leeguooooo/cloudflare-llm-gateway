@@ -21,7 +21,15 @@ import {
   reserveBalance,
   refundBalance,
   priceForModel,
+  availableModelSet,
 } from "./db";
+
+/** Virtual model id: let the gateway pick whichever provider can serve now. */
+export const AUTO_MODEL = "auto";
+
+export function isAutoModel(model: string): boolean {
+  return (model || "").trim().toLowerCase() === AUTO_MODEL;
+}
 
 export interface Caller {
   tokenId: number | null;
@@ -34,6 +42,7 @@ export async function serveChat(
   body: OpenAIChatRequest,
   caller: Caller
 ): Promise<Response> {
+  const auto = isAutoModel(body.model);
   const provider = routeModelToProvider(body.model);
   const promptChars = (body.messages ?? []).reduce((sum, m) => {
     const content: unknown = m.content;
@@ -60,14 +69,28 @@ export async function serveChat(
     const allowFallback = (body as { fallback?: unknown }).fallback !== false;
     if ("fallback" in body) delete (body as { fallback?: unknown }).fallback;
     const avail = await providersWithActiveKeys(env);
-    const order: Provider[] = [provider];
-    if (allowFallback) {
-      const others = PROVIDERS.filter((p) => p !== provider && avail.has(p));
+    let order: Provider[] = [provider];
+    // Per-provider model to send. "auto" picks each provider's default chat
+    // model (or its first model not marked unavailable).
+    const pick: Partial<Record<Provider, string>> = {};
+    if (auto) {
+      const blocked = await availableModelSet(env);
+      for (const p of PROVIDERS) {
+        if (!avail.has(p)) continue;
+        const models = [FALLBACK_MODEL[p], ...getAdapter(p).models()].filter((m) => m && !blocked.has(m));
+        if (models.length) pick[p] = models[0];
+      }
+      order = [];
+    }
+    if (allowFallback || auto) {
+      const others = PROVIDERS.filter((p) => avail.has(p) && (auto ? !!pick[p] : p !== provider));
       const priced = await Promise.all(
-        others.map(async (p) => ({ p, price: (await priceForModel(env, FALLBACK_MODEL[p])).output }))
+        others.map(async (p) => ({ p, price: (await priceForModel(env, pick[p] ?? FALLBACK_MODEL[p])).output }))
       );
       priced.sort((a, b) => a.price - b.price);
       for (const x of priced) order.push(x.p);
+      // "auto" with fallback disabled still gets one provider: the cheapest.
+      if (auto && !allowFallback) order = order.slice(0, 1);
     }
 
     let res: Response | null = null;
@@ -77,12 +100,12 @@ export async function serveChat(
     for (let i = 0; i < order.length; i++) {
       const prov = order[i];
       const adapter = getAdapter(prov);
-      const useModel = prov === provider ? body.model : FALLBACK_MODEL[prov];
+      const useModel = auto ? (pick[prov] as string) : prov === provider ? body.model : FALLBACK_MODEL[prov];
       // Clamp max_tokens to the provider's cap: an over-limit value makes some
       // upstreams reject (or emit an empty SSE stream) instead of serving.
       const clamped = clampMaxTokens(prov, (body as { max_tokens?: number }).max_tokens);
       const reqBody: OpenAIChatRequest =
-        prov === provider
+        prov === provider && !auto
           ? { ...body, max_tokens: clamped }
           : { ...body, model: useModel, max_tokens: clamped };
       res = await callWithPool(env, prov, (key) => adapter.chatCompletions(reqBody, key), {
@@ -97,7 +120,7 @@ export async function serveChat(
       if (res.status >= 200 && res.status <= 299) {
         servedBy = prov;
         servedModel = useModel;
-        fellBack = i > 0;
+        fellBack = i > 0 && !auto;
         break;
       }
     }
