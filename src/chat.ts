@@ -23,6 +23,7 @@ import {
   priceForModel,
   availableModelSet,
 } from "./db";
+import { applyReasoning, canReason, normalizeChatRequest, normalizeReasoningResponse, normEffort } from "./reasoning";
 
 /** Virtual model id: let the gateway pick whichever provider can serve now. */
 export const AUTO_MODEL = "auto";
@@ -42,6 +43,7 @@ const AUTO_RANK: string[] = [
   "mistral-large-latest",
   "deepseek/deepseek-chat",
   "gemini-2.0-flash",
+  "glm-4.5-flash",
   "llama-3.3-70b-versatile",
   "meta-llama/llama-3.3-70b-instruct",
   "command-r-plus",
@@ -61,7 +63,11 @@ const AUTO_RANK: string[] = [
 ];
 
 /** Providers to try for "auto", each with its best servable model, best first. */
-async function autoCandidates(env: Env, avail: Set<string>): Promise<Array<{ p: Provider; model: string }>> {
+async function autoCandidates(
+  env: Env,
+  avail: Set<string>,
+  wantReasoning: boolean
+): Promise<Array<{ p: Provider; model: string }>> {
   const blocked = await availableModelSet(env);
   const best = new Map<Provider, { model: string; rank: number }>();
   for (const p of PROVIDERS) {
@@ -69,7 +75,9 @@ async function autoCandidates(env: Env, avail: Set<string>): Promise<Array<{ p: 
     const models = getAdapter(p).models().filter((m) => m && !blocked.has(m));
     let pick: { model: string; rank: number } | null = null;
     for (const m of models) {
-      const r = AUTO_RANK.indexOf(m);
+      let r = AUTO_RANK.indexOf(m);
+      // Asked to think: models that can think go ahead of those that can't.
+      if (r >= 0 && wantReasoning && !canReason(m)) r += AUTO_RANK.length;
       if (r >= 0 && (!pick || r < pick.rank)) pick = { model: m, rank: r };
     }
     if (!pick) {
@@ -115,6 +123,7 @@ export async function serveChat(
   caller: Caller
 ): Promise<Response> {
   flattenTextParts(body);
+  normalizeChatRequest(body);
   const auto = isAutoModel(body.model);
   const provider = routeModelToProvider(body.model);
   const promptChars = (body.messages ?? []).reduce((sum, m) => {
@@ -146,7 +155,8 @@ export async function serveChat(
     // Per-provider model to send when serving "auto".
     const pick: Partial<Record<Provider, string>> = {};
     if (auto) {
-      const cands = await autoCandidates(env, avail);
+      const effort = normEffort((body as { reasoning_effort?: unknown }).reasoning_effort);
+      const cands = await autoCandidates(env, avail, !!effort && effort !== "none");
       for (const c of cands) pick[c.p] = c.model;
       order = cands.map((c) => c.p);
       if (!allowFallback) order = order.slice(0, 1);
@@ -170,10 +180,12 @@ export async function serveChat(
       // Clamp max_tokens to the provider's cap: an over-limit value makes some
       // upstreams reject (or emit an empty SSE stream) instead of serving.
       const clamped = clampMaxTokens(prov, (body as { max_tokens?: number }).max_tokens);
-      const reqBody: OpenAIChatRequest =
-        prov === provider && !auto
-          ? { ...body, max_tokens: clamped }
-          : { ...body, model: useModel, max_tokens: clamped };
+      // Thinking params are provider-specific, so translate per attempt
+      // (a fallback can land on a provider with a different dialect).
+      const reqBody: OpenAIChatRequest = applyReasoning(
+        prov,
+        prov === provider && !auto ? { ...body, max_tokens: clamped } : { ...body, model: useModel, max_tokens: clamped }
+      );
       res = await callWithPool(env, prov, (key) => adapter.chatCompletions(reqBody, key), {
         model: useModel,
         tokenId: caller.tokenId,
@@ -184,6 +196,7 @@ export async function serveChat(
         maxKeys: i === 0 ? undefined : 2,
       });
       if (res.status >= 200 && res.status <= 299) {
+        res = await normalizeReasoningResponse(prov, res);
         servedBy = prov;
         servedModel = useModel;
         fellBack = i > 0 && !auto;

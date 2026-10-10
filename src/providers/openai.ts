@@ -24,6 +24,12 @@ const openai: ProviderAdapter = {
       ...req,
       model: stripProviderPrefix(req.model),
     };
+    // Reasoning models (o-series, gpt-5) reject `max_tokens`; they take
+    // `max_completion_tokens` (which the gateway folds into max_tokens on entry).
+    if (/^(o[1-9]|gpt-5)/.test(String(body.model)) && typeof body.max_tokens === "number") {
+      body.max_completion_tokens = body.max_tokens;
+      delete body.max_tokens;
+    }
     return fetch(`${BASE}/v1/chat/completions`, {
       method: "POST",
       headers: {

@@ -13,7 +13,8 @@ const glm: ProviderAdapter = {
   models(): string[] {
     // Only the free tier is reliably callable; glm-4-plus/air/glm-4 need a paid
     // resource pack (429 余额不足). Widen this once paid keys are added.
-    return ["glm-4-flash"];
+    // glm-4.5-flash is free too and can think (`thinking: {type}`); verified 2026-10-11.
+    return ["glm-4.5-flash", "glm-4-flash"];
   },
 
   async chatCompletions(req: OpenAIChatRequest, key: string): Promise<Response> {

@@ -7,6 +7,7 @@
 
 import type { OpenAIChatRequest } from "./providers/types";
 import { forEachOpenAIChunk, ToolCallAccumulator } from "./sse";
+import { effortFromBudget, normEffort } from "./reasoning";
 
 // ---------- request: Gemini -> Chat ----------
 
@@ -27,6 +28,7 @@ export interface GeminiRequest {
     topP?: number;
     maxOutputTokens?: number;
     stopSequences?: string[];
+    thinkingConfig?: { thinkingBudget?: number; thinkingLevel?: string; includeThoughts?: boolean };
   };
   tools?: Array<{ functionDeclarations?: Array<{ name?: string; description?: string; parameters?: unknown; parametersJsonSchema?: unknown }> }>;
 }
@@ -90,6 +92,9 @@ export function geminiToChat(g: GeminiRequest, model: string, stream: boolean): 
     top_p: typeof gc.topP === "number" ? gc.topP : undefined,
     stop: Array.isArray(gc.stopSequences) && gc.stopSequences.length ? gc.stopSequences : undefined,
   };
+  const tc = gc.thinkingConfig;
+  const effort = tc ? (normEffort(tc.thinkingLevel) ?? (typeof tc.thinkingBudget === "number" ? effortFromBudget(tc.thinkingBudget) : undefined)) : undefined;
+  if (effort) out.reasoning_effort = effort;
   const decls = (g.tools ?? []).flatMap((t) => t.functionDeclarations ?? []).filter((d) => d.name);
   if (decls.length) {
     out.tools = decls.map((d) => ({
@@ -126,15 +131,22 @@ function usageMeta(inTok: number, outTok: number) {
 
 interface ChatCompletion {
   choices?: Array<{
-    message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
+    message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
-export function chatToGemini(c: ChatCompletion, model: string): unknown {
+/** Whether the Gemini caller asked to see thoughts (`includeThoughts`). */
+export function wantsThoughts(g: GeminiRequest): boolean {
+  return g.generationConfig?.thinkingConfig?.includeThoughts === true;
+}
+
+export function chatToGemini(c: ChatCompletion, model: string, thoughts = false): unknown {
   const ch = c.choices?.[0];
   const parts: GeminiPart[] = [];
+  const thinking = typeof ch?.message?.reasoning_content === "string" ? ch.message.reasoning_content : "";
+  if (thoughts && thinking) parts.push({ text: thinking, thought: true });
   const text = typeof ch?.message?.content === "string" ? ch.message.content : "";
   if (text || !ch?.message?.tool_calls?.length) parts.push({ text });
   for (const t of ch?.message?.tool_calls ?? []) {
@@ -152,7 +164,7 @@ export function chatToGemini(c: ChatCompletion, model: string): unknown {
  * `sse` the frames are `data: {GenerateContentResponse}`; without it Gemini
  * streams a single JSON array, which we emit incrementally as `[obj,obj,…]`.
  */
-export function chatStreamToGemini(upstream: ReadableStream<Uint8Array>, model: string, sse: boolean): ReadableStream<Uint8Array> {
+export function chatStreamToGemini(upstream: ReadableStream<Uint8Array>, model: string, sse: boolean, thoughts = false): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -177,6 +189,10 @@ export function chatStreamToGemini(upstream: ReadableStream<Uint8Array>, model: 
           }
           const ch = chunk.choices?.[0];
           if (!ch) return;
+          const thought = (ch.delta as { reasoning_content?: string | null } | undefined)?.reasoning_content;
+          if (thoughts && typeof thought === "string" && thought.length) {
+            emit({ candidates: [candidate([{ text: thought, thought: true }], null)], modelVersion: model });
+          }
           const piece = ch.delta?.content;
           if (typeof piece === "string" && piece.length) {
             emit({ candidates: [candidate([{ text: piece }], null)], modelVersion: model });

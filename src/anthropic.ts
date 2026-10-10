@@ -7,6 +7,7 @@
  */
 
 import type { OpenAIChatRequest } from "./providers/types";
+import { effortFromBudget, normEffort } from "./reasoning";
 
 // ---------- request: Anthropic -> OpenAI ----------
 
@@ -26,6 +27,10 @@ export interface AnthropicRequest {
   temperature?: number;
   top_p?: number;
   stop_sequences?: string[];
+  /** Extended thinking: enabled + budget, adaptive, or disabled. */
+  thinking?: { type?: string; budget_tokens?: number };
+  /** Newer effort knob (`output_config.effort`). */
+  output_config?: { effort?: string };
 }
 
 function blocksToOpenAIContent(content: string | AnthropicBlock[]): OpenAIChatRequest["messages"][number]["content"] {
@@ -76,10 +81,25 @@ export function anthropicToOpenAI(a: AnthropicRequest): OpenAIChatRequest {
     top_p: typeof a.top_p === "number" ? a.top_p : undefined,
     stop: Array.isArray(a.stop_sequences) ? a.stop_sequences : undefined,
   };
+  const effort =
+    normEffort(a.output_config?.effort) ??
+    (a.thinking?.type === "disabled"
+      ? "none"
+      : a.thinking?.type === "enabled"
+        ? effortFromBudget(typeof a.thinking.budget_tokens === "number" ? a.thinking.budget_tokens : 8192)
+        : a.thinking?.type === "adaptive"
+          ? "medium"
+          : undefined);
+  if (effort) out.reasoning_effort = effort;
   return out;
 }
 
 // ---------- response: OpenAI -> Anthropic ----------
+
+/** Placeholder signature on synthesized thinking blocks. Anthropic clients
+ *  echo it back on the next turn; the gateway drops thinking blocks from
+ *  history, so it is never verified. */
+const THINKING_SIGNATURE = "keypool-gateway";
 
 function mapStopReason(finish: string | null | undefined): string {
   switch (finish) {
@@ -99,7 +119,7 @@ function msgId(): string {
 }
 
 interface OpenAICompletion {
-  choices?: Array<{ message?: { content?: unknown }; finish_reason?: string | null }>;
+  choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown }; finish_reason?: string | null }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
@@ -107,12 +127,16 @@ interface OpenAICompletion {
 export function openAIToAnthropic(oai: OpenAICompletion, model: string): unknown {
   const choice = oai.choices?.[0];
   const text = typeof choice?.message?.content === "string" ? choice.message.content : "";
+  const thinking = typeof choice?.message?.reasoning_content === "string" ? choice.message.reasoning_content : "";
+  const content: unknown[] = [];
+  if (thinking) content.push({ type: "thinking", thinking, signature: THINKING_SIGNATURE });
+  content.push({ type: "text", text });
   return {
     id: msgId(),
     type: "message",
     role: "assistant",
     model,
-    content: [{ type: "text", text }],
+    content,
     stop_reason: mapStopReason(choice?.finish_reason),
     stop_sequence: null,
     usage: {
@@ -142,15 +166,38 @@ export function openAIStreamToAnthropic(upstream: ReadableStream<Uint8Array>, mo
   let stopReason = "end_turn";
   let outTokens = 0;
   let inTokens = 0;
+  // Open content block: thinking (reasoning_content) comes first, then text.
+  let block: "thinking" | "text" | null = null;
+  let index = -1;
   const reader = upstream.getReader();
 
+  function emit(controller: ReadableStreamDefaultController<Uint8Array>, event: string, data: unknown) {
+    controller.enqueue(enc.encode(sse(event, data)));
+  }
+
   function startEvents(controller: ReadableStreamDefaultController<Uint8Array>) {
-    controller.enqueue(enc.encode(sse("message_start", {
+    emit(controller, "message_start", {
       type: "message_start",
       message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: inTokens, output_tokens: 0 } },
-    })));
-    controller.enqueue(enc.encode(sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })));
+    });
     started = true;
+  }
+
+  function closeBlock(controller: ReadableStreamDefaultController<Uint8Array>) {
+    if (block === "thinking") {
+      emit(controller, "content_block_delta", { type: "content_block_delta", index, delta: { type: "signature_delta", signature: THINKING_SIGNATURE } });
+    }
+    if (block) emit(controller, "content_block_stop", { type: "content_block_stop", index });
+    block = null;
+  }
+
+  function openBlock(controller: ReadableStreamDefaultController<Uint8Array>, kind: "thinking" | "text") {
+    if (block === kind) return;
+    closeBlock(controller);
+    index++;
+    block = kind;
+    const content_block = kind === "thinking" ? { type: "thinking", thinking: "", signature: "" } : { type: "text", text: "" };
+    emit(controller, "content_block_start", { type: "content_block_start", index, content_block });
   }
 
   function handleLine(line: string, controller: ReadableStreamDefaultController<Uint8Array>) {
@@ -159,7 +206,7 @@ export function openAIStreamToAnthropic(upstream: ReadableStream<Uint8Array>, mo
     const data = t.slice(5).trim();
     if (!data || data === "[DONE]") return;
     let obj: {
-      choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+      choices?: Array<{ delta?: { content?: string | null; reasoning_content?: string | null }; finish_reason?: string | null }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     try { obj = JSON.parse(data); } catch { return; }
@@ -169,9 +216,15 @@ export function openAIStreamToAnthropic(upstream: ReadableStream<Uint8Array>, mo
     }
     const ch = obj.choices?.[0];
     if (!started) startEvents(controller);
+    const thought = ch?.delta?.reasoning_content;
+    if (typeof thought === "string" && thought.length) {
+      openBlock(controller, "thinking");
+      emit(controller, "content_block_delta", { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: thought } });
+    }
     const piece = ch?.delta?.content;
     if (typeof piece === "string" && piece.length) {
-      controller.enqueue(enc.encode(sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } })));
+      openBlock(controller, "text");
+      emit(controller, "content_block_delta", { type: "content_block_delta", index, delta: { type: "text_delta", text: piece } });
     }
     if (ch?.finish_reason) stopReason = mapStopReason(ch.finish_reason);
   }
@@ -194,9 +247,10 @@ export function openAIStreamToAnthropic(upstream: ReadableStream<Uint8Array>, mo
         }
         try {
           if (!started) startEvents(controller);
-          controller.enqueue(enc.encode(sse("content_block_stop", { type: "content_block_stop", index: 0 })));
-          controller.enqueue(enc.encode(sse("message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outTokens } })));
-          controller.enqueue(enc.encode(sse("message_stop", { type: "message_stop" })));
+          if (index < 0) openBlock(controller, "text");
+          closeBlock(controller);
+          emit(controller, "message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outTokens } });
+          emit(controller, "message_stop", { type: "message_stop" });
           controller.close();
         } catch {
           /* already closed */

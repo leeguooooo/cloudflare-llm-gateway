@@ -8,6 +8,7 @@
 
 import type { OpenAIChatRequest } from "./providers/types";
 import { forEachOpenAIChunk, randomHex, ToolCallAccumulator } from "./sse";
+import { normEffort } from "./reasoning";
 
 // ---------- request: Responses -> Chat ----------
 
@@ -35,6 +36,7 @@ export interface ResponsesRequest {
   top_p?: number;
   tools?: Array<{ type?: string; name?: string; description?: string; parameters?: unknown; strict?: boolean }>;
   tool_choice?: unknown;
+  reasoning?: { effort?: string; summary?: string };
   [k: string]: unknown;
 }
 
@@ -102,6 +104,8 @@ export function responsesToChat(r: ResponsesRequest): OpenAIChatRequest {
     }
   }
   if ("fallback" in r) out.fallback = r.fallback;
+  const effort = normEffort(r.reasoning?.effort);
+  if (effort) out.reasoning_effort = effort;
   return out;
 }
 
@@ -109,7 +113,7 @@ export function responsesToChat(r: ResponsesRequest): OpenAIChatRequest {
 
 interface ChatCompletion {
   choices?: Array<{
-    message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
+    message?: { content?: unknown; reasoning_content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -156,6 +160,10 @@ function messageItem(id: string, text: string, status = "completed") {
   };
 }
 
+function reasoningItem(id: string, text: string) {
+  return { type: "reasoning", id, summary: text ? [{ type: "summary_text", text }] : [] };
+}
+
 function functionCallItem(callId: string, name: string, args: string) {
   return { type: "function_call", id: "fc_" + randomHex(12), call_id: callId || "call_" + randomHex(12), name, arguments: args, status: "completed" };
 }
@@ -165,6 +173,8 @@ export function chatToResponses(c: ChatCompletion, r: ResponsesRequest): unknown
   const choice = c.choices?.[0];
   const text = typeof choice?.message?.content === "string" ? choice.message.content : "";
   const resp = baseResponse("resp_" + randomHex(24), r.model, r, "completed");
+  const thinking = typeof choice?.message?.reasoning_content === "string" ? choice.message.reasoning_content : "";
+  if (thinking) resp.output.push(reasoningItem("rs_" + randomHex(24), thinking));
   if (text || !choice?.message?.tool_calls?.length) resp.output.push(messageItem("msg_" + randomHex(24), text));
   for (const t of choice?.message?.tool_calls ?? []) {
     resp.output.push(functionCallItem(t.id ?? "", t.function?.name ?? "", t.function?.arguments ?? ""));
@@ -181,14 +191,15 @@ export function chatToResponses(c: ChatCompletion, r: ResponsesRequest): unknown
 
 /**
  * Translate a chat SSE stream into the Responses SSE event sequence:
- * response.created → in_progress → output_item.added → content_part.added →
- * output_text.delta* → output_text.done → content_part.done →
- * output_item.done → (function_call items) → response.completed.
+ * response.created → in_progress → [reasoning item: summary_text deltas] →
+ * message item: output_text deltas → (function_call items) →
+ * response.completed. Output indices follow the order items open.
  */
 export function chatStreamToResponses(upstream: ReadableStream<Uint8Array>, r: ResponsesRequest): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   const respId = "resp_" + randomHex(24);
   const msgId = "msg_" + randomHex(24);
+  const rsId = "rs_" + randomHex(24);
   let seq = 0;
 
   return new ReadableStream<Uint8Array>({
@@ -202,18 +213,40 @@ export function chatStreamToResponses(upstream: ReadableStream<Uint8Array>, r: R
         emit("response.created", { response: base });
         emit("response.in_progress", { response: base });
 
+        const output: unknown[] = [];
         let text = "";
-        let msgOpen = false;
+        let thinking = "";
+        let msgIdx = -1;
+        let rsIdx = -1;
+        let rsDone = false;
         let finish: string | null = null;
         let inTok = 0;
         let outTok = 0;
         const tools = new ToolCallAccumulator();
 
+        const openReasoning = () => {
+          if (rsIdx >= 0) return;
+          rsIdx = output.length;
+          output.push(null);
+          emit("response.output_item.added", { output_index: rsIdx, item: { ...reasoningItem(rsId, ""), summary: [] } });
+          emit("response.reasoning_summary_part.added", { item_id: rsId, output_index: rsIdx, summary_index: 0, part: { type: "summary_text", text: "" } });
+        };
+        const closeReasoning = () => {
+          if (rsIdx < 0 || rsDone) return;
+          rsDone = true;
+          emit("response.reasoning_summary_text.done", { item_id: rsId, output_index: rsIdx, summary_index: 0, text: thinking });
+          emit("response.reasoning_summary_part.done", { item_id: rsId, output_index: rsIdx, summary_index: 0, part: { type: "summary_text", text: thinking } });
+          const item = reasoningItem(rsId, thinking);
+          emit("response.output_item.done", { output_index: rsIdx, item });
+          output[rsIdx] = item;
+        };
         const openMsg = () => {
-          if (msgOpen) return;
-          msgOpen = true;
-          emit("response.output_item.added", { output_index: 0, item: { ...messageItem(msgId, "", "in_progress"), content: [] } });
-          emit("response.content_part.added", { item_id: msgId, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
+          if (msgIdx >= 0) return;
+          closeReasoning();
+          msgIdx = output.length;
+          output.push(null);
+          emit("response.output_item.added", { output_index: msgIdx, item: { ...messageItem(msgId, "", "in_progress"), content: [] } });
+          emit("response.content_part.added", { item_id: msgId, output_index: msgIdx, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
         };
 
         await forEachOpenAIChunk(upstream, (chunk) => {
@@ -223,26 +256,32 @@ export function chatStreamToResponses(upstream: ReadableStream<Uint8Array>, r: R
           }
           const ch = chunk.choices?.[0];
           if (!ch) return;
+          const thought = (ch.delta as { reasoning_content?: string | null } | undefined)?.reasoning_content;
+          if (typeof thought === "string" && thought.length && msgIdx < 0) {
+            openReasoning();
+            thinking += thought;
+            emit("response.reasoning_summary_text.delta", { item_id: rsId, output_index: rsIdx, summary_index: 0, delta: thought });
+          }
           const piece = ch.delta?.content;
           if (typeof piece === "string" && piece.length) {
             openMsg();
             text += piece;
-            emit("response.output_text.delta", { item_id: msgId, output_index: 0, content_index: 0, delta: piece, logprobs: [] });
+            emit("response.output_text.delta", { item_id: msgId, output_index: msgIdx, content_index: 0, delta: piece, logprobs: [] });
           }
           if (ch.delta?.tool_calls) tools.add(ch.delta.tool_calls);
           if (ch.finish_reason) finish = ch.finish_reason;
         });
 
         try {
+          closeReasoning();
           const calls = tools.list();
-          const output: unknown[] = [];
-          if (msgOpen || calls.length === 0) {
+          if (msgIdx >= 0 || calls.length === 0) {
             openMsg();
-            emit("response.output_text.done", { item_id: msgId, output_index: 0, content_index: 0, text, logprobs: [] });
-            emit("response.content_part.done", { item_id: msgId, output_index: 0, content_index: 0, part: { type: "output_text", text, annotations: [] } });
+            emit("response.output_text.done", { item_id: msgId, output_index: msgIdx, content_index: 0, text, logprobs: [] });
+            emit("response.content_part.done", { item_id: msgId, output_index: msgIdx, content_index: 0, part: { type: "output_text", text, annotations: [] } });
             const item = messageItem(msgId, text);
-            emit("response.output_item.done", { output_index: 0, item });
-            output.push(item);
+            emit("response.output_item.done", { output_index: msgIdx, item });
+            output[msgIdx] = item;
           }
           for (const c of calls) {
             const idx = output.length;

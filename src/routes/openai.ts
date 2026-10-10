@@ -13,6 +13,7 @@ import type { AnthropicRequest } from "../anthropic";
 import { responsesToChat, chatToResponses, chatStreamToResponses } from "../responses";
 import type { ResponsesRequest } from "../responses";
 import { passKeypoolHeaders, upstreamErrorMessage } from "../sse";
+import { canReason, REASONING_LEVELS } from "../reasoning";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -41,7 +42,11 @@ export async function servableModels(env: Env): Promise<Array<{ id: string; owne
 /** Model entry readable by both OpenAI (`object`/`owned_by`) and Anthropic
  *  (`type`/`display_name`/`created_at`) clients. */
 function modelEntry(m: { id: string; owner: string }) {
+  const reasoning = canReason(m.id);
   return {
+    // Thinking capability, in the shape Magpie / Codex-style clients read.
+    reasoning,
+    supported_reasoning_levels: reasoning ? REASONING_LEVELS.map((effort) => ({ effort })) : [],
     id: m.id,
     object: "model" as const,
     owned_by: m.owner,

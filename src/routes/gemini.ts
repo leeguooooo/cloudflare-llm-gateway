@@ -16,7 +16,7 @@ import { requireUser, resolveCaller } from "../auth";
 import { checkTokenLimits } from "../db";
 import { serveChat } from "../chat";
 import { servableModels } from "./openai";
-import { geminiToChat, chatToGemini, chatStreamToGemini, geminiModelEntry } from "../gemini-compat";
+import { geminiToChat, chatToGemini, chatStreamToGemini, geminiModelEntry, wantsThoughts } from "../gemini-compat";
 import type { GeminiRequest } from "../gemini-compat";
 import { passKeypoolHeaders, upstreamErrorMessage } from "../sse";
 
@@ -97,7 +97,7 @@ app.post("/models/*", async (c) => {
   const passHeaders = passKeypoolHeaders(oai);
   if (stream && oai.body) {
     const sse = new URL(c.req.url).searchParams.get("alt") === "sse";
-    return new Response(chatStreamToGemini(oai.body, model, sse), {
+    return new Response(chatStreamToGemini(oai.body, model, sse, wantsThoughts(g)), {
       status: 200,
       headers: {
         "content-type": sse ? "text/event-stream; charset=utf-8" : "application/json; charset=utf-8",
@@ -107,7 +107,7 @@ app.post("/models/*", async (c) => {
     });
   }
   const j = await oai.json().catch(() => ({}));
-  return new Response(JSON.stringify(chatToGemini(j as Parameters<typeof chatToGemini>[0], model)), {
+  return new Response(JSON.stringify(chatToGemini(j as Parameters<typeof chatToGemini>[0], model, wantsThoughts(g))), {
     status: 200,
     headers: { "content-type": "application/json", ...passHeaders },
   });

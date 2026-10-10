@@ -1,6 +1,7 @@
 /** Gemini provider adapter: OpenAI<->Gemini translation (incl. streaming) + native passthrough. */
 
 import type { ProviderAdapter, OpenAIChatRequest } from "./types";
+import { budgetFromEffort, canReason, normEffort } from "../reasoning";
 
 const BASE = "https://generativelanguage.googleapis.com";
 
@@ -18,6 +19,7 @@ interface GeminiGenerationConfig {
   temperature?: number;
   topP?: number;
   stopSequences?: string[];
+  thinkingConfig?: { thinkingBudget?: number; includeThoughts?: boolean };
 }
 
 interface GeminiRequestBody {
@@ -75,6 +77,12 @@ function toGeminiBody(req: OpenAIChatRequest): GeminiRequestBody {
   } else if (Array.isArray(req.stop)) {
     generationConfig.stopSequences = req.stop.filter((s): s is string => typeof s === "string");
   }
+  // unverified (all Gemini keys disabled 2026-10-11): 2.5+ models take a
+  // thinking budget; older ones reject thinkingConfig, so only send it there.
+  const effort = normEffort((req as { reasoning_effort?: unknown }).reasoning_effort);
+  if (effort && canReason(req.model)) {
+    generationConfig.thinkingConfig = { thinkingBudget: budgetFromEffort(effort), includeThoughts: effort !== "none" };
+  }
   if (Object.keys(generationConfig).length > 0) {
     body.generationConfig = generationConfig;
   }
@@ -82,8 +90,9 @@ function toGeminiBody(req: OpenAIChatRequest): GeminiRequestBody {
   return body;
 }
 
-/** Extract the concatenated text from a single Gemini response chunk/object. */
-function extractText(obj: unknown): string {
+/** Extract the concatenated text from a single Gemini response chunk/object.
+ *  `thoughts` selects the `thought: true` parts instead of the answer parts. */
+function extractText(obj: unknown, thoughts = false): string {
   if (!obj || typeof obj !== "object") return "";
   const o = obj as Record<string, unknown>;
   const candidates = o.candidates;
@@ -97,8 +106,9 @@ function extractText(obj: unknown): string {
   let text = "";
   for (const part of parts) {
     if (part && typeof part === "object") {
-      const t = (part as Record<string, unknown>).text;
-      if (typeof t === "string") text += t;
+      const pr = part as Record<string, unknown>;
+      if ((pr.thought === true) !== thoughts) continue;
+      if (typeof pr.text === "string") text += pr.text;
     }
   }
   return text;
@@ -143,6 +153,7 @@ const jsonHeaders = { "content-type": "application/json" };
 /** Translate a non-stream Gemini response into an OpenAI chat.completion. */
 function toOpenAICompletion(gem: unknown, model: string): unknown {
   const text = extractText(gem);
+  const thoughts = extractText(gem, true);
   const finish = mapFinishReason(extractFinishReason(gem)) ?? "stop";
 
   let promptTokens = 0;
@@ -166,7 +177,7 @@ function toOpenAICompletion(gem: unknown, model: string): unknown {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: text },
+        message: thoughts ? { role: "assistant", content: text, reasoning_content: thoughts } : { role: "assistant", content: text },
         finish_reason: finish,
       },
     ],
@@ -213,9 +224,13 @@ function streamToOpenAI(
       return;
     }
     const text = extractText(obj);
+    const thoughts = extractText(obj, true);
     if (!sentRole) {
       controller.enqueue(chunkFrame({ role: "assistant", content: "" }, null));
       sentRole = true;
+    }
+    if (thoughts) {
+      controller.enqueue(chunkFrame({ reasoning_content: thoughts }, null));
     }
     if (text) {
       controller.enqueue(chunkFrame({ content: text }, null));
