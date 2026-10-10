@@ -72,10 +72,18 @@ const PUBLIC_HOST = "ai.leeguoo.com";
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+    let rewrite = false;
     if (url.hostname === ORIGIN_ALIAS) {
       url.hostname = PUBLIC_HOST;
-      request = new Request(url, request);
+      rewrite = true;
     }
+    // Clients that join a trailing-slash base URL with "/v1/…" send "//v1/…"
+    // (Magpie's Anthropic probe does); collapse it so the route still matches.
+    if (url.pathname.includes("//")) {
+      url.pathname = url.pathname.replace(/\/{2,}/g, "/");
+      rewrite = true;
+    }
+    if (rewrite) request = new Request(url, request);
     return app.fetch(request, env, ctx);
   },
   scheduled,
